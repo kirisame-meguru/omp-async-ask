@@ -1,0 +1,123 @@
+import { expect, test } from "bun:test";
+import type { CustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
+import { AnswerDelivery, type DeliveryPort } from "../src/delivery";
+import { QuestionStore } from "../src/state";
+import { input, journal, recorded } from "./helpers";
+
+function setup() {
+	const log = journal();
+	const store = new QuestionStore("a", log.append);
+	const sent: CustomMessagePayload[] = [];
+	let owner = "a";
+	let idle = false;
+	const port: DeliveryPort = {
+		sessionId: () => owner,
+		isIdle: () => idle,
+		entries: () => log.entries,
+		send: (message, options) => {
+			expect(options.deliverAs).toBe("aside");
+			sent.push(message);
+		},
+	};
+	const delivery = new AnswerDelivery(store, port);
+	return {
+		log,
+		store,
+		sent,
+		port,
+		delivery,
+		switchOwner: () => {
+			owner = "b";
+		},
+		settle: () => {
+			idle = true;
+			delivery.settle();
+		},
+	};
+}
+
+test("submitting an answer does not await an executing tool or generate duplicate dispatch", async () => {
+	const activeTool = Promise.withResolvers<void>();
+	let finished = false;
+	void activeTool.promise.then(() => {
+		finished = true;
+	});
+	const { store, delivery, sent } = setup();
+	const question = store.create(input, "one");
+	delivery.submit(question.id, { target: "staging" }, []);
+	expect(finished).toBe(false);
+	expect(store.get(question.id)?.delivery).toBe("queued");
+	expect(sent).toHaveLength(1);
+	expect(() => delivery.submit(question.id, { target: "production" }, [])).toThrow();
+	expect(() => delivery.retry(question.id)).toThrow("queued");
+	expect(sent).toHaveLength(1);
+	activeTool.resolve();
+	await activeTool.promise;
+	const answer = store.get(question.id)!.answer!;
+	delivery.observe(recorded("a", question.id, answer.id));
+	expect(store.get(question.id)?.delivery).toBe("recorded");
+});
+
+test("an immediate delivery event cannot be overwritten with queued state", () => {
+	const { store, delivery, port } = setup();
+	const question = store.create(input, "one");
+	port.send = () => delivery.observe(recorded("a", question.id, store.get(question.id)!.answer!.id));
+	delivery.submit(question.id, { target: "staging" }, []);
+	expect(store.get(question.id)?.delivery).toBe("recorded");
+});
+
+test("stale callbacks after a session switch or disposal cannot submit into another session", () => {
+	const { store, delivery, sent, switchOwner } = setup();
+	const question = store.create(input, "one");
+	switchOwner();
+	expect(() => delivery.submit(question.id, { target: "staging" }, [])).toThrow("session");
+	expect(store.get(question.id)?.status).toBe("pending");
+	delivery.dispose();
+	expect(() => delivery.retry(question.id)).toThrow("session");
+	expect(sent).toEqual([]);
+});
+
+test("send failure preserves the submitted answer as unconfirmed for explicit retry", () => {
+	const { store, delivery, port, sent } = setup();
+	const question = store.create(input, "one");
+	port.send = () => {
+		throw new Error("transport rejected");
+	};
+	expect(() => delivery.submit(question.id, { target: "staging" }, [])).toThrow("transport rejected");
+	const answerId = store.get(question.id)!.answer!.id;
+	expect(store.get(question.id)?.delivery).toBe("unconfirmed");
+	port.send = message => {
+		sent.push(message);
+	};
+	delivery.retry(question.id);
+	expect(store.get(question.id)?.answer?.id).toBe(answerId);
+	expect(sent).toHaveLength(1);
+});
+
+test("settling without an observed answer exposes uncertainty but does not automatically retry", () => {
+	const { store, delivery, sent, settle } = setup();
+	const question = store.create(input, "one");
+	delivery.submit(question.id, { target: "staging" }, []);
+	delivery.settle();
+	expect(store.get(question.id)?.delivery).toBe("queued");
+	settle();
+	expect(store.get(question.id)?.delivery).toBe("unconfirmed");
+	expect(sent).toHaveLength(1);
+});
+
+test("retry reconciles a recorded message before dispatching again", () => {
+	const { store, delivery, sent, log } = setup();
+	const question = store.create(input, "one");
+	store.submit(question.id, { target: "staging" }, []);
+	const answerId = store.get(question.id)!.answer!.id;
+	log.entries.push({
+		type: "message",
+		id: "message",
+		parentId: log.entries.at(-1)!.id,
+		timestamp: new Date().toISOString(),
+		message: recorded("a", question.id, answerId),
+	});
+	delivery.retry(question.id);
+	expect(store.get(question.id)?.delivery).toBe("recorded");
+	expect(sent).toEqual([]);
+});
