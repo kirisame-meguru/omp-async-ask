@@ -2,7 +2,7 @@ import { beforeAll, expect, test } from "bun:test";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { TspHarness } from "./tsp-harness";
 import { QuestionStore } from "../src/state";
-import { QuestionInbox, type InboxActions } from "../src/ui";
+import { QuestionInbox, QuestionIndicator, type InboxActions } from "../src/ui";
 import { input, journal } from "./helpers";
 
 beforeAll(async () => {
@@ -28,6 +28,35 @@ function fixture() {
 	};
 	return { store, actions, closed: () => closed };
 }
+
+test("indicator highlights pending questions and returns to neutral after withdrawal or recording", () => {
+	const fx = fixture();
+	let opened = 0;
+	const indicator = new QuestionIndicator(fx.actions, () => opened++);
+	expect(indicator.describe().p).toMatchObject({ variant: "default", tone: "neutral" });
+	const first = fx.store.create(input, "one");
+	const highlighted = indicator.describe();
+	expect(highlighted.p).toMatchObject({ variant: "primary", tone: "accent", icon: "inbox" });
+	expect(indicator.describe()).toBe(highlighted);
+	indicator.handleNativeEvent({ type: "action", key: "", act: "open", mods: [] });
+	expect(opened).toBe(1);
+	fx.store.withdraw(first.id, "Resolved independently");
+	expect(indicator.describe().p).toMatchObject({ variant: "default", tone: "neutral" });
+	const second = fx.store.create(input, "two");
+	fx.store.submit(second.id, { target: "staging" }, []);
+	fx.store.setDelivery(second.id, "unconfirmed");
+	expect(indicator.describe().p).toMatchObject({ variant: "primary", tone: "warning", icon: "warn" });
+	fx.store.setDelivery(second.id, "recorded");
+	expect(indicator.describe().p).toMatchObject({ variant: "default", tone: "neutral" });
+	indicator.dispose();
+});
+
+test("indicator surfaces history errors even when no pending question was recoverable", () => {
+	const fx = fixture();
+	const indicator = new QuestionIndicator({ ...fx.actions, errors: () => ["Malformed history"] }, () => {});
+	expect(indicator.describe().p).toMatchObject({ variant: "danger", tone: "error", icon: "warn" });
+	indicator.dispose();
+});
 
 test("Escape folds then closes without submitting the recommended default", () => {
 	const fx = fixture();

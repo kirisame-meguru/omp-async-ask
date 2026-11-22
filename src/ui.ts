@@ -91,12 +91,24 @@ export class QuestionIndicator implements Component {
 		return [truncateToWidth(`${this.#label()} · /questions`, width)];
 	}
 	describe(): NativeNode {
-		return (this.#native ??= node("button", {
+		if (this.#native) return this.#native;
+		const questions = this.actions.questions();
+		const pending = questions.some(question => question.status === "pending");
+		const uncertain = questions.some(question => question.delivery === "unconfirmed");
+		const errors = this.actions.errors().length > 0;
+		return (this.#native = node("button", {
 			text: this.#label(),
-			icon: "inbox",
-			variant: "default",
+			icon: errors || (!pending && uncertain) ? "warn" : "inbox",
+			variant: errors ? "danger" : pending || uncertain ? "primary" : "default",
+			tone: errors ? "error" : pending ? "accent" : uncertain ? "warning" : "neutral",
 			size: "md",
-			title: "Open questions — answer now or leave them for later",
+			title: errors
+				? "Inbox history needs attention"
+				: pending
+					? "Questions are waiting for your answer"
+					: uncertain
+						? "Answer delivery is unconfirmed — open the inbox to review"
+						: "Open questions — nothing needs your attention",
 			actions: { click: "open" },
 		}));
 	}
