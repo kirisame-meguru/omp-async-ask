@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import type { CustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
 import { AnswerDelivery, type DeliveryPort } from "../src/delivery";
 import { QuestionStore } from "../src/state";
-import { input, journal, recorded } from "./helpers";
+import { input, journal, recorded, recordedEntry } from "./helpers";
 
 function setup() {
 	const log = journal();
@@ -77,7 +77,7 @@ test("stale callbacks after a session switch or disposal cannot submit into anot
 	expect(sent).toEqual([]);
 });
 
-test("send failure preserves the submitted answer as unconfirmed for explicit retry", () => {
+test("send failure preserves the submitted answer as failed for explicit retry", () => {
 	const { store, delivery, port, sent } = setup();
 	const question = store.create(input, "one");
 	port.send = () => {
@@ -85,7 +85,7 @@ test("send failure preserves the submitted answer as unconfirmed for explicit re
 	};
 	expect(() => delivery.submit(question.id, { target: "staging" }, [])).toThrow("transport rejected");
 	const answerId = store.get(question.id)!.answer!.id;
-	expect(store.get(question.id)?.delivery).toBe("unconfirmed");
+	expect(store.get(question.id)?.delivery).toBe("failed");
 	port.send = message => {
 		sent.push(message);
 	};
@@ -120,4 +120,31 @@ test("retry reconciles a recorded message before dispatching again", () => {
 	delivery.retry(question.id);
 	expect(store.get(question.id)?.delivery).toBe("recorded");
 	expect(sent).toEqual([]);
+});
+
+test("settling recognizes actual custom_message receipts even without a message_end event", () => {
+	const { store, delivery, sent, log, settle } = setup();
+	const question = store.create(input, "one");
+	delivery.submit(question.id, { target: "staging" }, []);
+	const answerId = store.get(question.id)!.answer!.id;
+	log.entries.push(recordedEntry("a", question.id, answerId));
+	settle();
+	expect(store.get(question.id)?.delivery).toBe("recorded");
+	delivery.retry(question.id);
+	expect(sent).toHaveLength(1);
+	const restored = new QuestionStore("a", log.append);
+	restored.restore(log.entries);
+	expect(restored.get(question.id)?.delivery).toBe("recorded");
+});
+
+test("an uncertain answer is reconciled from custom_message before any explicit resend", () => {
+	const { store, delivery, sent, log, settle } = setup();
+	const question = store.create(input, "one");
+	delivery.submit(question.id, { target: "staging" }, []);
+	settle();
+	expect(store.get(question.id)?.delivery).toBe("unconfirmed");
+	log.entries.push(recordedEntry("a", question.id, store.get(question.id)!.answer!.id));
+	delivery.retry(question.id);
+	expect(store.get(question.id)?.delivery).toBe("recorded");
+	expect(sent).toHaveLength(1);
 });

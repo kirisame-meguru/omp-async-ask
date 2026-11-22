@@ -119,6 +119,7 @@ test("policy appends before any question without mutating or accumulating on the
 			systemPrompt: base,
 		})) as BeforeAgentStartEventResult;
 		expect(result.systemPrompt).toEqual([...base, goalPolicy]);
+		expect(result.systemPrompt?.at(-1)).toStartWith("## Goal persistence and non-blocking questions\n\n");
 	}
 	expect(fx.log.entries).toEqual([]);
 });

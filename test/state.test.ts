@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
 import { EVENT_TYPE, MAX_PENDING, QuestionStore } from "../src/state";
-import { input, journal, recorded } from "./helpers";
+import { input, journal, recorded, recordedEntry } from "./helpers";
 
 describe("question journal", () => {
 	test("retrying creation returns the existing request's current state, not another pending question", () => {
@@ -84,6 +84,31 @@ describe("question journal", () => {
 		store.restore(log.entries);
 		expect(store.get(question.id)?.delivery).toBe("recorded");
 		store.restore(log.entries.slice(0, -1));
+		expect(store.get(question.id)?.delivery).toBe("unconfirmed");
+	});
+
+	test("custom_message receipts match session, question, answer and custom type on restore", () => {
+		const log = journal();
+		const store = new QuestionStore("a", log.append);
+		const question = store.create(input, "one");
+		store.submit(question.id, { target: "staging" }, []);
+		const answerId = store.get(question.id)!.answer!.id;
+		const receipt = recordedEntry("a", question.id, answerId);
+		for (const wrong of [
+			recordedEntry("other", question.id, answerId),
+			recordedEntry("a", "other-question", answerId),
+			recordedEntry("a", question.id, "other-answer"),
+			{ ...receipt, customType: "unrelated" },
+		]) {
+			expect(store.observeEntry(wrong)).toBe(false);
+			store.restore([...log.entries, wrong]);
+			expect(store.get(question.id)?.delivery).toBe("unconfirmed");
+		}
+		store.restore([...log.entries, receipt]);
+		expect(store.get(question.id)?.delivery).toBe("recorded");
+		expect(store.errors).toEqual([]);
+		// Missing evidence stays uncertain, never implicitly accepted or resent.
+		store.restore(log.entries);
 		expect(store.get(question.id)?.delivery).toBe("unconfirmed");
 	});
 

@@ -32,9 +32,7 @@ export class AnswerDelivery {
 		this.#send(question);
 	}
 	#reconcile(): void {
-		for (const entry of this.port.entries()) {
-			if (entry.type === "message") this.store.observe(entry.message);
-		}
+		for (const entry of this.port.entries()) this.store.observeEntry(entry);
 	}
 	retry(id: string): void {
 		this.#assertCurrent();
@@ -71,7 +69,7 @@ export class AnswerDelivery {
 				{ deliverAs: "aside" },
 			);
 		} catch (error) {
-			if (this.store.get(question.id)?.delivery !== "recorded") this.store.setDelivery(question.id, "unconfirmed");
+			if (this.store.get(question.id)?.delivery !== "recorded") this.store.setDelivery(question.id, "failed");
 			throw error;
 		}
 	}

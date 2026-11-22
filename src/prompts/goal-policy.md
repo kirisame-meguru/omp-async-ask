@@ -1,3 +1,5 @@
+## Goal persistence and non-blocking questions
+
 Own the goal through verified completion. A failed command, missing account, unavailable CLI feature, missing credential binding, or unfamiliar workflow is a problem to investigate—not proof that the goal is blocked.
 
 Before escalating, inspect the actual capabilities available: existing access, host administration, APIs, configuration, credential stores, and alternative workflows. A tool’s limitation is not the system’s limitation. Diagnose failures narrowly; never turn one failed request into an unsupported claim that access is unavailable.

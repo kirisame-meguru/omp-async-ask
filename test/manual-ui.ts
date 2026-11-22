@@ -6,7 +6,7 @@ import { isRecord } from "@oh-my-pi/pi-utils";
 import { AnswerDelivery } from "../src/delivery";
 import { QuestionStore } from "../src/state";
 import { type InboxActions, QuestionInbox, QuestionIndicator } from "../src/ui";
-import { input, journal, recorded } from "./helpers";
+import { input, journal, recordedEntry } from "./helpers";
 
 await initTheme(false);
 const tui = new TUI(new ProcessTerminal());
@@ -90,15 +90,11 @@ const timer = setInterval(() => {
 			continue;
 		const question = store.get(payload.details.requestId);
 		if (!question?.answer || question.answer.id !== payload.details.answerId) continue;
-		const message = recorded("fixture", question.id, question.answer.id);
 		log.entries.push({
-			type: "message",
-			id: crypto.randomUUID(),
+			...recordedEntry("fixture", question.id, question.answer.id),
 			parentId: log.entries.at(-1)?.id ?? null,
-			timestamp: new Date().toISOString(),
-			message,
 		});
-		delivery.observe(message);
+		delivery.settle();
 		result.setText(`Recorded answer: ${JSON.stringify(question.answer.data)} at independent work step ${steps}`);
 	}
 	tui.requestRender();

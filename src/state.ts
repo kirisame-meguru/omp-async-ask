@@ -17,7 +17,7 @@ export interface CreateQuestion {
 	continueWith?: string[];
 	key?: string;
 }
-export type DeliveryState = "submitted" | "queued" | "recorded" | "unconfirmed";
+export type DeliveryState = "submitted" | "queued" | "recorded" | "unconfirmed" | "failed";
 export interface AnswerNote {
 	name: string;
 	question: string;
@@ -264,8 +264,16 @@ export class QuestionStore {
 		this.#changed();
 	}
 	observe(message: AgentMessage): boolean {
-		if (message.role !== "custom" || message.customType !== ANSWER_TYPE || !isRecord(message.details)) return false;
-		const { sessionId, requestId, answerId } = message.details;
+		return message.role === "custom" && this.#observeAnswer(message.customType, message.details);
+	}
+	observeEntry(entry: SessionEntry): boolean {
+		// sendMessage persists custom messages as their own entry type, not a nested MessageEntry.
+		if (entry.type === "custom_message") return this.#observeAnswer(entry.customType, entry.details);
+		return entry.type === "message" && this.observe(entry.message);
+	}
+	#observeAnswer(customType: string, details: unknown): boolean {
+		if (customType !== ANSWER_TYPE || !isRecord(details)) return false;
+		const { sessionId, requestId, answerId } = details;
 		if (sessionId !== this.sessionId || typeof requestId !== "string") return false;
 		const question = this.get(requestId);
 		if (!question?.answer || question.answer.id !== answerId) return false;
@@ -305,7 +313,7 @@ export class QuestionStore {
 				} catch (error) {
 					this.#errors.push(`Record ${entry.id}: ${String(error)}`);
 				}
-			} else if (entry.type === "message") this.observe(entry.message);
+			} else this.observeEntry(entry);
 		}
 		this.#changed();
 	}

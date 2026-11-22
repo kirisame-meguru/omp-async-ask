@@ -36,10 +36,15 @@ Built-in Ask, approvals, stops, and cost limits remain unchanged; the extension 
 not force additional agent turns. It permits independent work but does not guarantee
 that a model will choose to continue it.
 
-“Recorded in conversation” means the answer entered the conversation, not that the
-model read or acted on it. Restored answers without a matching message are marked
-unconfirmed and require an explicit retry, which may duplicate delivery. Public
-extension APIs do not provide crash-proof exactly-once persistence or delivery.
+The Questions button glows only for unanswered questions. Missing delivery receipts
+do not add a notification count or imply that you must answer again. Actual send
+failures show a separate warning; answers remain saved and resending is explicit.
+
+Internally, a matching conversation receipt marks delivery as recorded—not proof
+that the model read or acted on the answer. When a receipt is unavailable, delivery
+details remain accessible inside the answered card. Resending may duplicate delivery;
+the plugin never retries automatically. Public extension APIs do not provide
+crash-proof exactly-once persistence or delivery.
 
 ## Development
 

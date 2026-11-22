@@ -33,3 +33,22 @@ export function recorded(sessionId: string, requestId: string, answerId: string)
 		details: { sessionId, requestId, answerId },
 	};
 }
+
+/** The actual on-disk envelope written by OMP's public sendMessage API. */
+export function recordedEntry(
+	sessionId: string,
+	requestId: string,
+	answerId: string,
+): Extract<SessionEntry, { type: "custom_message" }> {
+	return {
+		type: "custom_message",
+		id: crypto.randomUUID(),
+		parentId: null,
+		timestamp: new Date().toISOString(),
+		customType: ANSWER_TYPE,
+		content: "The user answered.",
+		display: true,
+		attribution: "user",
+		details: { sessionId, requestId, answerId },
+	};
+}

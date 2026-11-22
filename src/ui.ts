@@ -24,7 +24,7 @@ function clean(value: string): string {
 function status(question: Question): string {
 	if (question.status === "withdrawn") return "Withdrawn";
 	if (question.status === "pending") return "Pending";
-	return question.delivery === "recorded" ? "Answered · recorded" : `Answered · delivery ${question.delivery}`;
+	return question.delivery === "failed" ? "Answered · send failed" : "Answered";
 }
 
 /** Adapt only public action-button descriptors; keep the SDK's fields, validation and event routing. */
@@ -84,8 +84,8 @@ export class QuestionIndicator implements Component {
 	#label(): string {
 		const questions = this.actions.questions();
 		const pending = questions.filter(question => question.status === "pending").length;
-		const uncertain = questions.filter(question => question.delivery === "unconfirmed").length;
-		return `Questions · ${pending} pending${uncertain ? ` · ${uncertain} unconfirmed` : ""}${this.actions.errors().length ? " · history error" : ""}`;
+		const failed = questions.filter(question => question.delivery === "failed").length;
+		return `Questions · ${pending} pending${failed ? ` · ${failed} send failed` : ""}${this.actions.errors().length ? " · history error" : ""}`;
 	}
 	render(width: number): readonly string[] {
 		return [truncateToWidth(`${this.#label()} · /questions`, width)];
@@ -94,21 +94,21 @@ export class QuestionIndicator implements Component {
 		if (this.#native) return this.#native;
 		const questions = this.actions.questions();
 		const pending = questions.some(question => question.status === "pending");
-		const uncertain = questions.some(question => question.delivery === "unconfirmed");
+		const failed = questions.some(question => question.delivery === "failed");
 		const errors = this.actions.errors().length > 0;
 		return (this.#native = node("button", {
 			text: this.#label(),
-			icon: errors || (!pending && uncertain) ? "warn" : "inbox",
-			variant: errors ? "danger" : pending || uncertain ? "primary" : "default",
-			tone: errors ? "error" : pending ? "accent" : uncertain ? "warning" : "neutral",
+			icon: errors || failed ? "warn" : "inbox",
+			variant: pending ? "primary" : "default",
+			tone: pending ? "accent" : "neutral",
 			size: "md",
 			title: errors
 				? "Inbox history needs attention"
 				: pending
 					? "Questions are waiting for your answer"
-					: uncertain
-						? "Answer delivery is unconfirmed — open the inbox to review"
-						: "Open questions — nothing needs your attention",
+					: failed
+						? "An answer could not be sent — open the inbox to review"
+						: "Open answered questions",
 			actions: { click: "open" },
 		}));
 	}
@@ -188,6 +188,7 @@ export class QuestionInbox implements Component, Focusable {
 			this.#expand(
 				(
 					questions.find(question => question.status === "pending") ??
+					questions.find(question => question.delivery === "failed") ??
 					questions.find(question => question.delivery === "unconfirmed") ??
 					questions[0]
 				)?.id,
@@ -293,7 +294,11 @@ export class QuestionInbox implements Component, Focusable {
 		this.#refresh();
 	}
 	#retry(): void {
-		if (this.actions.questions().some(q => q.id === this.#expanded && q.delivery === "unconfirmed"))
+		if (
+			this.actions
+				.questions()
+				.some(q => q.id === this.#expanded && (q.delivery === "unconfirmed" || q.delivery === "failed"))
+		)
 			this.#confirm = "retry";
 	}
 	handleInput(data: string): void {
@@ -397,13 +402,16 @@ export class QuestionInbox implements Component, Focusable {
 					),
 				);
 			}
-			if (question.delivery === "unconfirmed") {
+			if (question.delivery === "unconfirmed" || question.delivery === "failed") {
+				const failed = question.delivery === "failed";
 				body.push(
-					text("Your answer is saved, but delivery to the agent is unconfirmed.", {
-						tone: "warning",
-						wrap: "word",
-					}),
-					node("button", { text: "Review retry…", icon: "repeat", actions: { click: "retry" } }),
+					text(
+						failed
+							? "Your answer is saved, but sending failed."
+							: "Answer saved. No delivery receipt is available.",
+						{ tone: failed ? "warning" : "muted", wrap: "word" },
+					),
+					node("button", { text: "Review resend…", icon: "repeat", actions: { click: "retry" } }),
 				);
 			}
 		}

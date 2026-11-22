@@ -29,7 +29,7 @@ function fixture() {
 	return { store, actions, closed: () => closed };
 }
 
-test("indicator highlights pending questions and returns to neutral after withdrawal or recording", () => {
+test("indicator highlights only pending questions, not missing delivery receipts", () => {
 	const fx = fixture();
 	let opened = 0;
 	const indicator = new QuestionIndicator(fx.actions, () => opened++);
@@ -45,7 +45,12 @@ test("indicator highlights pending questions and returns to neutral after withdr
 	const second = fx.store.create(input, "two");
 	fx.store.submit(second.id, { target: "staging" }, []);
 	fx.store.setDelivery(second.id, "unconfirmed");
-	expect(indicator.describe().p).toMatchObject({ variant: "primary", tone: "warning", icon: "warn" });
+	expect(indicator.describe().p).toMatchObject({
+		variant: "default",
+		tone: "neutral",
+		icon: "inbox",
+		text: "Questions · 0 pending",
+	});
 	fx.store.setDelivery(second.id, "recorded");
 	expect(indicator.describe().p).toMatchObject({ variant: "default", tone: "neutral" });
 	indicator.dispose();
@@ -54,7 +59,29 @@ test("indicator highlights pending questions and returns to neutral after withdr
 test("indicator surfaces history errors even when no pending question was recoverable", () => {
 	const fx = fixture();
 	const indicator = new QuestionIndicator({ ...fx.actions, errors: () => ["Malformed history"] }, () => {});
-	expect(indicator.describe().p).toMatchObject({ variant: "danger", tone: "error", icon: "warn" });
+	expect(indicator.describe().p).toMatchObject({ variant: "default", tone: "neutral", icon: "warn" });
+	indicator.dispose();
+});
+
+test("a real send failure has a separate warning without the pending-question glow", () => {
+	const fx = fixture();
+	const indicator = new QuestionIndicator(fx.actions, () => {});
+	const question = fx.store.create(input, "one");
+	fx.store.submit(question.id, { target: "staging" }, []);
+	fx.store.setDelivery(question.id, "failed");
+	expect(indicator.describe().p).toMatchObject({
+		variant: "default",
+		tone: "neutral",
+		icon: "warn",
+		text: "Questions · 0 pending · 1 send failed",
+	});
+	const inbox = new QuestionInbox(fx.actions);
+	inbox.handleNativeEvent({ type: "action", key: "", act: "retry", mods: [] });
+	expect(inbox.debugState()).toMatchObject({ confirmation: "retry" });
+	expect(fx.store.get(question.id)?.delivery).toBe("failed");
+	inbox.handleNativeEvent({ type: "action", key: "", act: "confirm", mods: [] });
+	expect(fx.store.get(question.id)?.delivery).toBe("queued");
+	inbox.dispose();
 	indicator.dispose();
 });
 
@@ -217,7 +244,7 @@ test("closing retained drafts asks once and keeping them restores the expanded f
 	inbox.dispose();
 });
 
-test("answered-only inbox immediately exposes unconfirmed delivery and confirms retries", () => {
+test("delivery uncertainty remains reviewable inside an answered question without implying a missing answer", () => {
 	const fx = fixture();
 	const question = fx.store.create(input, "one");
 	fx.store.submit(question.id, { target: "staging" }, []);
