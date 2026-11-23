@@ -19,6 +19,7 @@ interface Connection {
 	store: QuestionStore;
 	delivery: AnswerDelivery;
 	attention: QuestionAttention;
+	unsubscribeWidget?: () => void;
 	overlay?: AbortController;
 }
 function supported(ctx: ExtensionContext): boolean {
@@ -31,6 +32,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const previous = connection;
 		connection = undefined;
 		if (!previous) return;
+		previous.unsubscribeWidget?.();
 		previous.delivery.dispose();
 		previous.attention.dispose();
 		previous.overlay?.abort();
@@ -70,18 +72,28 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		});
 		const owner: Connection = { ctx, store, delivery, attention: new QuestionAttention(store) };
 		connection = owner;
-		ctx.ui.setWidget(
-			WIDGET,
-			tui =>
-				new QuestionIndicator(
-					actions(owner, () => {}),
-					() => {
-						if (connection !== owner) return;
-						void open(ctx).catch(error => ctx.ui.notify(String(error), "error"));
-					},
-					tui,
-				),
-		);
+		let widgetVisible = false;
+		const syncWidget = () => {
+			const pending = store.list().some(question => question.status === "pending");
+			if (pending === widgetVisible) return;
+			widgetVisible = pending;
+			ctx.ui.setWidget(
+				WIDGET,
+				pending
+					? tui =>
+							new QuestionIndicator(
+								actions(owner, () => {}),
+								() => {
+									if (connection !== owner) return;
+									void open(ctx).catch(error => ctx.ui.notify(String(error), "error"));
+								},
+								tui,
+							)
+					: undefined,
+			);
+		};
+		owner.unsubscribeWidget = store.subscribe(syncWidget);
+		syncWidget();
 		return owner;
 	}
 	async function open(ctx: ExtensionContext): Promise<void> {

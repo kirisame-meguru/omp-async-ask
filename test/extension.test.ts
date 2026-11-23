@@ -42,8 +42,13 @@ function fixture() {
 	let hasUI = true;
 	let openCount = 0;
 	let component: Component | undefined;
+	let widget: (Component & { dispose?: () => void }) | undefined;
 	const ui = {
-		setWidget: () => {},
+		setWidget: (_key: string, content: Parameters<ExtensionUIContext["setWidget"]>[1]) => {
+			widget?.dispose?.();
+			widget =
+				typeof content === "function" ? content({ requestRender: () => {} } as never, {} as never) : undefined;
+		},
 		notify: () => {},
 		custom: (factory: Parameters<ExtensionUIContext["custom"]>[0], options?: { signal?: AbortSignal }) => {
 			openCount++;
@@ -111,6 +116,7 @@ function fixture() {
 		},
 		opened: () => openCount,
 		component: () => component,
+		widget: () => widget,
 	};
 }
 
@@ -212,6 +218,46 @@ test("only an explicit user command opens the inbox and closing it submits nothi
 	await opened;
 	expect(fx.sent).toEqual([]);
 	expect(fx.log.entries).toHaveLength(1);
+});
+
+test("Questions widget exists only while pending; the command still opens answer history", async () => {
+	const fx = fixture();
+	await fx.emit("session_start");
+	expect(fx.widget()).toBeUndefined();
+	const tool = fx.tools[0]!;
+	const create = (key: string) => tool.execute(key, { op: "create", ...input, key }, undefined, undefined, fx.ctx);
+	const withdraw = (id: string) =>
+		tool.execute("withdraw", { op: "withdraw", id, reason: "Resolved" }, undefined, undefined, fx.ctx);
+	const first = await create("first");
+	const indicator = fx.widget();
+	expect(indicator?.render(100).join("")).toContain("1 pending");
+	await create("second");
+	expect(fx.widget()).toBe(indicator);
+	expect(indicator?.render(100).join("")).toContain("2 pending");
+	await withdraw(arktype({ id: "string" }).assert(first.details).id);
+	expect(fx.widget()?.render(100).join("")).toContain("1 pending");
+
+	const opening = fx.commands.get("questions")!.handler("", fx.ctx);
+	const inbox = fx.component();
+	if (!(inbox instanceof QuestionInbox)) throw new Error("Expected the real question inbox");
+	inbox.handleInput("staging");
+	inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
+	await opening;
+	expect(fx.sent).toHaveLength(1);
+	expect(fx.widget()).toBeUndefined();
+
+	const history = fx.commands.get("questions")!.handler("", fx.ctx);
+	const reopened = fx.component();
+	if (!(reopened instanceof QuestionInbox)) throw new Error("Expected answer history");
+	expect(reopened.debugState()).toMatchObject({ tab: "answered" });
+	expect(fx.widget()).toBeUndefined();
+	reopened.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	await history;
+
+	const third = await create("third");
+	expect(fx.widget()?.render(100).join("")).toContain("1 pending");
+	await withdraw(arktype({ id: "string" }).assert(third.details).id);
+	expect(fx.widget()).toBeUndefined();
 });
 
 test("switch invalidates an open inbox and does not inherit its pending questions", async () => {
@@ -319,11 +365,14 @@ test("native attention follows rendering availability, restored questions and se
 		expect(reports).toHaveLength(5);
 		expect(reports.at(-2)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
 		expect(reports.at(-1)).toContain("state=blocked");
+		expect(fx.widget()?.render(100).join("")).toContain("1 pending");
 		await fx.emit("session_before_switch");
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
+		expect(fx.widget()).toBeUndefined();
 		fx.switchSession();
 		await fx.emit("session_switch");
 		expect(reports).toHaveLength(6);
+		expect(fx.widget()).toBeUndefined();
 		await fx.emit("session_shutdown");
 		terminal.setNativeRendering(false);
 		terminal.setNativeRendering(true);

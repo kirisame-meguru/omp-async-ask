@@ -23,6 +23,8 @@ chevron to switch; only one question opens at a time. Sending an answer opens th
 next pending question. The inbox closes automatically when the last pending question
 is answered or withdrawn. Reopening it with no pending questions shows answer history.
 A sending failure stays open for review instead of disappearing.
+The Questions widget is hidden when nothing is pending; `/questions` remains available
+to open history.
 
 “Skip for now” leaves the question pending. Switching cards or tabs preserves drafts
 while the inbox stays open; closing it discards drafts after confirmation. Skipped
