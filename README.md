@@ -40,6 +40,13 @@ The Questions button glows only for unanswered questions. Missing delivery recei
 do not add a notification count or imply that you must answer again. Actual send
 failures show a separate warning; answers remain saved and resending is explicit.
 
+With native Tern rendering, pending questions also mark the session icon as waiting.
+The terminal chooses its waiting color (red in Tern 0.9.30). This uses a separate
+[OSC 7501](https://www.superlogical.com/rex/docs/build/program-status) record:
+agent work can continue, and answering or withdrawing the last question removes
+only the inbox's status, leaving OMP's own work/approval status intact. The record
+is also cleared on session changes, shutdown, or leaving native rendering.
+
 Internally, a matching conversation receipt marks delivery as recorded—not proof
 that the model read or acted on the answer. When a receipt is unavailable, delivery
 details remain accessible inside the answered card. Resending may duplicate delivery;

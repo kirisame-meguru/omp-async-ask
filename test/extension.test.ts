@@ -1,4 +1,4 @@
-import { beforeAll, expect, test } from "bun:test";
+import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
 import { type as arktype } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -12,14 +12,20 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { Component } from "@oh-my-pi/pi-tui";
+import * as terminal from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import asyncAsk from "../src/index";
 import goalPolicy from "../src/prompts/goal-policy.md" with { type: "text" };
 import { EVENT_TYPE, type QuestionEvent } from "../src/state";
+import { QuestionInbox } from "../src/ui";
 import { input, journal } from "./helpers";
 
 beforeAll(async () => {
 	await initTheme(false);
+});
+const cleanupFixtures: (() => unknown)[] = [];
+afterEach(async () => {
+	for (const cleanup of cleanupFixtures.splice(0)) await cleanup();
 });
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
@@ -82,6 +88,7 @@ function fixture() {
 		},
 	} as unknown as ExtensionAPI;
 	asyncAsk(api);
+	cleanupFixtures.push(() => handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx));
 	return {
 		ctx,
 		log,
@@ -249,4 +256,80 @@ test("context restoration exposes pending dependencies without replaying questio
 	expect(JSON.stringify(result.messages)).toContain("Deploying the service");
 	expect(fx.sent).toEqual([]);
 	expect(fx.opened()).toBe(0);
+});
+
+test("pending questions own a native attention record until answered or withdrawn", async () => {
+	const reports: string[] = [];
+	const writer = spyOn(terminal, "writeTerminalSequence").mockImplementation(data => {
+		reports.push(data);
+	});
+	const fx = fixture();
+	terminal.setNativeRendering(true);
+	try {
+		await fx.emit("session_start");
+		expect(reports).toEqual([]);
+		const tool = fx.tools[0]!;
+		const create = (id: string) =>
+			tool.execute(id, { op: "create", ...input, key: id }, undefined, undefined, fx.ctx);
+		const first = await create("first");
+		await create("second");
+		expect(reports).toEqual([
+			"\x1b]7501;state=blocked:kind=question:id=omp-async-ask:app=omp:title=UXVlc3Rpb25z\x1b\\",
+		]);
+		const firstId = arktype({ id: "string" }).assert(first.details).id;
+		await tool.execute("withdraw", { op: "withdraw", id: firstId, reason: "Resolved" }, undefined, undefined, fx.ctx);
+		expect(reports).toHaveLength(1);
+		const opening = fx.commands.get("questions")!.handler("", fx.ctx);
+		const inbox = fx.component();
+		if (!(inbox instanceof QuestionInbox)) throw new Error("Expected the real question inbox");
+		inbox.handleInput("staging");
+		inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
+		// Use the native form's real action path, not a fabricated store transition.
+		expect(fx.sent).toHaveLength(1);
+		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
+		await fx.emit("session_shutdown");
+		await opening;
+	} finally {
+		await fx.emit("session_shutdown");
+		terminal.setNativeRendering(false);
+		writer.mockRestore();
+	}
+});
+
+test("native attention follows rendering availability, restored questions and session ownership", async () => {
+	const reports: string[] = [];
+	const writer = spyOn(terminal, "writeTerminalSequence").mockImplementation(data => {
+		reports.push(data);
+	});
+	const fx = fixture();
+	terminal.setNativeRendering(false);
+	try {
+		await fx.emit("session_start");
+		await fx.tools[0]!.execute("pending", { op: "create", ...input }, undefined, undefined, fx.ctx);
+		expect(reports).toEqual([]);
+		terminal.setNativeRendering(true);
+		expect(reports).toHaveLength(1);
+		expect(reports.at(-1)).toContain("state=blocked:kind=question:id=omp-async-ask");
+		terminal.setNativeRendering(false);
+		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
+		terminal.setNativeRendering(true);
+		expect(reports).toHaveLength(3);
+		await fx.emit("session_start");
+		expect(reports).toHaveLength(5);
+		expect(reports.at(-2)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
+		expect(reports.at(-1)).toContain("state=blocked");
+		await fx.emit("session_before_switch");
+		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
+		fx.switchSession();
+		await fx.emit("session_switch");
+		expect(reports).toHaveLength(6);
+		await fx.emit("session_shutdown");
+		terminal.setNativeRendering(false);
+		terminal.setNativeRendering(true);
+		expect(reports).toHaveLength(6);
+	} finally {
+		await fx.emit("session_shutdown");
+		terminal.setNativeRendering(false);
+		writer.mockRestore();
+	}
 });

@@ -1,8 +1,9 @@
-import { type Component, matchesKey, ProcessTerminal, Text, TUI } from "@oh-my-pi/pi-tui";
+import { type Component, matchesKey, ProcessTerminal, Text, TUI, writeTerminalSequence } from "@oh-my-pi/pi-tui";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import type { CustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
 import { text } from "@oh-my-pi/pi-tui/native/describe";
 import { isRecord } from "@oh-my-pi/pi-utils";
+import { QuestionAttention } from "../src/attention";
 import { AnswerDelivery } from "../src/delivery";
 import { QuestionStore } from "../src/state";
 import { type InboxActions, QuestionInbox, QuestionIndicator } from "../src/ui";
@@ -12,6 +13,7 @@ await initTheme(false);
 const tui = new TUI(new ProcessTerminal());
 const log = journal();
 const store = new QuestionStore("fixture", log.append);
+const attention = new QuestionAttention(store);
 const queued: CustomMessagePayload[] = [];
 const delivery = new AnswerDelivery(store, {
 	sessionId: () => "fixture",
@@ -85,6 +87,8 @@ tui.setFocus(home);
 let steps = 0;
 const timer = setInterval(() => {
 	work.setText(`Independent work steps: ${++steps}`);
+	// The host may finish work while questions remain unanswered.
+	if (steps === 4) writeTerminalSequence("\x1b]7501;state=done:app=omp\x1b\\");
 	for (const payload of queued.splice(0)) {
 		if (typeof payload === "string" || !isRecord(payload.details) || typeof payload.details.requestId !== "string")
 			continue;
@@ -102,10 +106,17 @@ const timer = setInterval(() => {
 function stop(): void {
 	clearInterval(timer);
 	delivery.dispose();
+	attention.dispose();
+	writeTerminalSequence("\x1b]7501;state=clear\x1b\\");
 	inbox?.dispose();
 	indicator.dispose();
 	tui.stop();
 	process.exit(0);
 }
 process.once("SIGTERM", stop);
+tui.terminal.onProgramStatusSupport?.(supported => {
+	result.setText(`OSC 7501 supported: ${supported}. No user answer has been submitted.`);
+});
 tui.start();
+tui.terminal.setTitle("\u{f04fe} GOAL: Async Ask tab attention acceptance");
+writeTerminalSequence("\x1b]7501;state=working:app=omp\x1b\\");

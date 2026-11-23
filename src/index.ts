@@ -1,5 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { prompt, truncate } from "@oh-my-pi/pi-utils";
+import { QuestionAttention } from "./attention";
 import { AnswerDelivery } from "./delivery";
 import contextTemplate from "./prompts/context.md" with { type: "text" };
 import goalPolicy from "./prompts/goal-policy.md" with { type: "text" };
@@ -17,6 +18,7 @@ interface Connection {
 	ctx: ExtensionContext;
 	store: QuestionStore;
 	delivery: AnswerDelivery;
+	attention: QuestionAttention;
 	overlay?: AbortController;
 }
 function supported(ctx: ExtensionContext): boolean {
@@ -30,6 +32,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		connection = undefined;
 		if (!previous) return;
 		previous.delivery.dispose();
+		previous.attention.dispose();
 		previous.overlay?.abort();
 		previous.ctx.ui.setWidget(WIDGET, undefined);
 	}
@@ -65,7 +68,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 			entries: () => ctx.sessionManager.getBranch(),
 			send: (message, options) => pi.sendMessage(message, options),
 		});
-		const owner: Connection = { ctx, store, delivery };
+		const owner: Connection = { ctx, store, delivery, attention: new QuestionAttention(store) };
 		connection = owner;
 		ctx.ui.setWidget(
 			WIDGET,
