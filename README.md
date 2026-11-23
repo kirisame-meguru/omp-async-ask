@@ -1,3 +1,13 @@
+> ### Better together with [omp-away](https://github.com/kirisame-meguru/omp-away)
+>
+> **Step away from the keyboard—not the conversation.**
+>
+> Async Ask lets your agent queue decisions and continue independent work. The planned **omp-away** integration takes that freedom further: hear questions on your paired Android phone, talk through the options, and explicitly confirm an answer back to the same session. Fewer trips to the terminal; no guessing on your behalf.
+>
+> *Integration in development. omp-away is optional; Async Ask works standalone.*
+
+---
+
 <p align="center">
   <img src="assets/hero.png" alt="omp-async-ask — a non-blocking question inbox for oh-my-pi" width="1200">
 </p>
