@@ -1,13 +1,14 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { prompt, truncate } from "@oh-my-pi/pi-utils";
+import { isRecord, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
 import { AVAILABLE, createQuestionSource, serveQuestionSources, type OwnedQuestionSource } from "./bridge";
 import { AnswerDelivery } from "./delivery";
+import { AnswerCard, questionRenderers, savedAnswerPresentation, summarizeAnswer } from "./presentation";
 import contextTemplate from "./prompts/context.md" with { type: "text" };
 import goalPolicy from "./prompts/goal-policy.md" with { type: "text" };
 import receiptTemplate from "./prompts/receipt.md" with { type: "text" };
 import toolDescription from "./prompts/tool.md" with { type: "text" };
-import { EVENT_TYPE, QuestionStore } from "./state";
+import { ANSWER_TYPE, EVENT_TYPE, QuestionStore } from "./state";
 import { type InboxActions, QuestionInbox, QuestionIndicator } from "./ui";
 
 const CONTEXT_TYPE = "omp-async-ask:context";
@@ -143,6 +144,17 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		"id?": "string",
 		"reason?": "string",
 	});
+	pi.registerMessageRenderer(ANSWER_TYPE, (message, options) => {
+		const details = isRecord(message.details) ? message.details : {};
+		const question = details.sessionId === connection?.store.sessionId && typeof details.requestId === "string"
+			? connection?.store.get(details.requestId) : undefined;
+		const summary = savedAnswerPresentation(details)
+			?? (question?.answer?.id === details.answerId && question?.answer ? summarizeAnswer(question) : undefined);
+		if (!summary) return undefined;
+		const raw = typeof message.content === "string"
+			? message.content : message.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+		return new AnswerCard(summary, options.expanded, raw);
+	});
 	pi.registerTool<typeof parameters>({
 		name: "ask_async",
 		label: "Ask asynchronously",
@@ -150,6 +162,10 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		approval: "read",
 		defaultInactive: true,
 		parameters,
+		...questionRenderers(id => {
+			const owner = connection;
+			if (owner && (!id || owner.store.get(id))) void open(owner.ctx);
+		}, id => connection?.store.get(id)),
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			try {
 				signal?.throwIfAborted();
@@ -183,7 +199,10 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 								},
 								toolCallId,
 							);
-				const details = { id: question.id, status: question.status, delivery: question.delivery };
+				const details = {
+					id: question.id, status: question.status, delivery: question.delivery,
+					title: question.title, blockedWork: question.blockedWork, reason: question.reason,
+				};
 				return {
 					content: [
 						{

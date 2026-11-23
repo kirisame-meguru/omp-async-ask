@@ -3,6 +3,7 @@ import type { CustomMessagePayload, SessionEntry } from "@oh-my-pi/pi-coding-age
 import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
 import { prompt } from "@oh-my-pi/pi-utils";
 import answerTemplate from "./prompts/answer.md" with { type: "text" };
+import { summarizeAnswer } from "./presentation";
 import { ANSWER_TYPE, type AnswerNote, type DeliveryState, type Question, type QuestionStore } from "./state";
 
 export interface DeliveryPort {
@@ -74,7 +75,10 @@ export class AnswerDelivery {
 					customType: ANSWER_TYPE,
 					display: true,
 					attribution: "user",
-					details: { sessionId: this.store.sessionId, requestId: question.id, answerId: answer.id },
+					details: {
+						sessionId: this.store.sessionId, requestId: question.id, answerId: answer.id,
+						presentation: summarizeAnswer(question),
+					},
 					content: prompt.render(answerTemplate, {
 						requestId: question.id,
 						answerId: answer.id,
