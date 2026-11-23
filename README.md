@@ -39,7 +39,7 @@ sequenceDiagram
     participant Inbox as Question inbox
     participant You
     Agent->>Inbox: ask_async — question + dependent work
-    Inbox-->>Agent: Queued; no answer yet
+    Inbox-->>Agent: Queued — no answer yet
     Agent->>Agent: Continue independent work
     You->>Inbox: Open /questions, fill in, and submit
     Inbox-->>Agent: Deliver explicit answer through the session
