@@ -96,15 +96,17 @@ function validAnswer(value: unknown): value is SubmittedAnswer {
 		value.notes.every(validNote)
 	);
 }
+export class InvalidAnswerError extends Error {}
+
 function validateSubmission(question: Question, data: HtmlFormData, notes: AnswerNote[]): void {
-	if (!validData(data) || !notes.every(validNote)) throw new Error("Invalid answer data or unsupported attachments.");
+	if (!validData(data) || !notes.every(validNote)) throw new InvalidAnswerError("Invalid answer data or unsupported attachments.");
 	const form = parseHtmlForm(question.html);
 	const names = new Set([...form.fields.flatMap(field => (field.name ? [field.name] : [])), ...form.hidden.keys()]);
-	if (Object.keys(data).some(name => !names.has(name))) throw new Error("Answer contains an unknown field.");
+	if (Object.keys(data).some(name => !names.has(name))) throw new InvalidAnswerError("Answer contains an unknown field.");
 	for (const field of form.fields) {
 		if (!field.name) continue;
 		const error = fieldError(field, data[field.name]);
-		if (error) throw new Error(`${field.name}: ${error}`);
+		if (error) throw new InvalidAnswerError(`${field.name}: ${error}`);
 	}
 }
 function validEvent(value: unknown): value is QuestionEvent {
