@@ -449,6 +449,9 @@ test("Tern question cards hide transport payloads and open the real inbox", asyn
 		expect(drawn).not.toContain("blockedWork=");
 		const button = harness.find(node => node.k === "button" && node.p?.text === "Open questions");
 		expect(button).toBeDefined();
+		const actionGroup = harness.find(node => node.k === "col" && node.c?.some(child => child.id === button!.id) === true);
+		expect(actionGroup?.k === "col" ? actionGroup.p?.gap : undefined).toBe("sm");
+		expect(actionGroup?.c?.[0]?.k).toBe("col");
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
 		expect(fx.opened()).toBe(1);
 		expect(harness.errors).toEqual([]);

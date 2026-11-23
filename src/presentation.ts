@@ -86,7 +86,9 @@ class OpenQuestions implements Component {
 	describe(): NativeNode {
 		const button = node("button", { text: "Open questions", icon: "inbox", actions: { click: "open" } });
 		const view = this.receipt?.();
-		return view ? col([text(view.status), ...view.rows.map(row => text(row)), button]) : button;
+		return view
+			? col([col([text(view.status), ...view.rows.map(row => text(row))]), button], { gap: "sm" })
+			: button;
 	}
 	handleNativeEvent(event: NativeUiEvent): void {
 		if (event.type === "action" && event.act === "open") this.open();
