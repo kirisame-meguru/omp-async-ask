@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Async Ask</title>
+  <desc id="desc">A geometric A above a symmetrical inbox tray.</desc>
+  <defs>
+    <linearGradient id="brand" x1="92" y1="72" x2="420" y2="432" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#eb41d9"/>
+      <stop offset="0.5" stop-color="#9e56f2"/>
+      <stop offset="1" stop-color="#66ccf4"/>
+    </linearGradient>
+  </defs>
+  <g fill="url(#brand)">
+    <path fill-rule="evenodd" d="M236 72H276L380 300H330L309 252H203L182 300H132Z M256 136L220 212H292Z"/>
+    <path d="M92 332H132L156 388H356L380 332H420L380 432H132Z"/>
+  </g>
+</svg>

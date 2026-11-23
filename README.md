@@ -148,10 +148,10 @@ Use the control port of that isolated window, not a live working session.
 | [`src/attention.ts`](src/attention.ts) | Native session waiting-state indicator |
 | [`src/prompts/`](src/prompts/) | Static model-facing instructions and goal-persistence policy |
 | [`test/`](test/) | Regression tests, native surface harness, and acceptance fixtures |
-| [`assets/`](assets/) | Generated logo and composed README hero |
+| [`assets/`](assets/) | Geometric logo (SVG/PNG) and composed README hero |
 
 Early design and implementation records live in [`docs/superpowers/`](docs/superpowers/). Their original checkout paths are historical; this package now lives independently of the OMP checkout. The native test harness is vendored from OMP under its MIT license and uses published package entrypoints.
 
 ---
 
-[MIT licensed](LICENSE). Built for [oh-my-pi](https://github.com/can1357/oh-my-pi). Visual direction inspired by its [hero artwork](https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png), with an original AI-generated logo and independently composed banner.
+[MIT licensed](LICENSE). Built for [oh-my-pi](https://github.com/can1357/oh-my-pi). Visual direction inspired by its [hero artwork](https://github.com/can1357/oh-my-pi/blob/main/assets/hero.png), with an original [geometric logo](assets/logo.svg) and independently composed banner.
