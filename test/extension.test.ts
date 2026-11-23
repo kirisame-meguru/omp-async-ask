@@ -287,8 +287,9 @@ test("pending questions own a native attention record until answered or withdraw
 		// Use the native form's real action path, not a fabricated store transition.
 		expect(fx.sent).toHaveLength(1);
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
-		await fx.emit("session_shutdown");
+		// The final answer closes the real extension overlay without a shutdown event.
 		await opening;
+		await fx.emit("session_shutdown");
 	} finally {
 		await fx.emit("session_shutdown");
 		terminal.setNativeRendering(false);

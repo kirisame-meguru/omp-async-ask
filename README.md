@@ -17,17 +17,21 @@ omp -e ./src/index.ts
 ```
 
 The agent's `ask_async` tool queues questions and returns immediately. Open `/questions`
-or click the Questions widget: the first pending question is already expanded. Click a
-card's chevron to switch; only one question opens at a time. Sending an answer opens
-the next pending question. Skipped cards are amber, answered cards green; delivery
-status remains separate from whether you answered.
+or click the Questions widget. **Pending** opens the first unanswered question;
+**Answered** keeps completed answers and withdrawn history separate. Click a card's
+chevron to switch; only one question opens at a time. Sending an answer opens the
+next pending question. The inbox closes automatically when the last pending question
+is answered or withdrawn. Reopening it with no pending questions shows answer history.
+A sending failure stays open for review instead of disappearing.
 
-“Skip for now” leaves the question pending. Switching cards preserves drafts while
-the inbox stays open; closing it discards drafts after confirmation. New questions
-never open the inbox or interrupt the question you are answering.
+“Skip for now” leaves the question pending. Switching cards or tabs preserves drafts
+while the inbox stays open; closing it discards drafts after confirmation. Skipped
+cards are amber and answered cards green. New questions never open the inbox or
+interrupt the question you are answering.
 
-Ordinary terminals use Ctrl+Up/Down to switch questions, Escape to fold the form,
-then arrows and Enter to select/expand cards. Escape outside a form closes the inbox.
+Ordinary terminals use Ctrl+Left/Right to switch tabs, Ctrl+Up/Down to switch questions,
+Escape to fold the form, then arrows and Enter to select/expand cards.
+Escape outside a form closes the inbox.
 Restart OMP after changing the linked source.
 
 Only top-level interactive sessions are supported. Answers are stored in session

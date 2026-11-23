@@ -118,7 +118,7 @@ test("a form withdrawn while open cannot accept a stale answer", () => {
 	inbox.handleInput("staging");
 	inbox.handleInput("\r");
 	expect(fx.store.get(question.id)?.status).toBe("withdrawn");
-	expect(inbox.render(100).join("\n")).toContain("Found the target independently");
+	expect(fx.closed()).toBe(true);
 	inbox.dispose();
 });
 
@@ -145,7 +145,7 @@ test("Tern opens the first form immediately, submits it and advances to the next
 		expect(fx.store.get(question.id)?.answer?.data).toEqual({ target: "staging" });
 		expect(inbox?.debugState()).toMatchObject({ expanded: next.id, form: next.id });
 		const answered = harness.find(node => node.k === "card" && node.id.endsWith(`/${question.id}`));
-		expect(answered?.p).toMatchObject({ tone: "success", collapsed: true });
+		expect(answered).toBeUndefined();
 		const expanded = harness.find(node => node.k === "card" && node.id.endsWith(`/${next.id}`));
 		expect(expanded?.p).toMatchObject({ collapsed: false });
 		expect(harness.tui.nativeFallbackCount).toBe(0);
@@ -223,6 +223,7 @@ test("skip advances through unanswered questions without submitting defaults or 
 	inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "cancel", mods: [] });
 	expect(inbox.debugState()).toMatchObject({ expanded: null, skipped: [first.id, second.id] });
 	expect(fx.store.list().every(question => question.status === "pending")).toBe(true);
+	expect(fx.closed()).toBe(false);
 	inbox.dispose();
 });
 
@@ -271,4 +272,95 @@ test("withdrawal of a folded draft disposes it without disturbing the current qu
 	expect(fx.store.get(first.id)?.status).toBe("withdrawn");
 	expect(inbox.debugState()).toMatchObject({ expanded: second.id, form: second.id });
 	inbox.dispose();
+});
+
+test("the last answer closes once, after submission finishes, and history can reopen", () => {
+	const fx = fixture();
+	const question = fx.store.create(input, "one");
+	let closes = 0;
+	const inbox = new QuestionInbox({
+		...fx.actions,
+		submit: (id, data, notes) => {
+			fx.store.submit(id, data, notes);
+			expect(closes).toBe(0);
+			fx.store.setDelivery(id, "queued");
+		},
+		close: () => {
+			closes++;
+		},
+	});
+	inbox.handleInput("staging");
+	inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
+	expect(fx.store.get(question.id)?.delivery).toBe("queued");
+	expect(closes).toBe(1);
+	fx.store.setDelivery(question.id, "recorded");
+	inbox.handleInput("\u001b");
+	expect(closes).toBe(1);
+	inbox.dispose();
+	const history = new QuestionInbox(fx.actions);
+	expect(history.debugState()).toMatchObject({ tab: "answered", expanded: question.id });
+	expect(fx.closed()).toBe(false);
+	history.dispose();
+});
+
+test("a synchronous send failure stays open on the answered tab for recovery", () => {
+	const fx = fixture();
+	const question = fx.store.create(input, "one");
+	const inbox = new QuestionInbox({
+		...fx.actions,
+		submit: (id, data, notes) => {
+			fx.store.submit(id, data, notes);
+			fx.store.setDelivery(id, "failed");
+			throw new Error("Sending failed");
+		},
+	});
+	inbox.handleInput("staging");
+	inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
+	expect(fx.closed()).toBe(false);
+	expect(inbox.debugState()).toMatchObject({ tab: "answered", expanded: question.id });
+	expect(inbox.render(120).join("\n")).toContain("Sending failed");
+	inbox.dispose();
+});
+
+test("native pending and answered tabs filter cards and preserve drafts across switches", async () => {
+	const fx = fixture();
+	const pending = fx.store.create(input, "pending");
+	const answered = fx.store.create({ ...input, title: "Earlier answer" }, "answered");
+	fx.store.submit(answered.id, { target: "production" }, []);
+	let inbox: QuestionInbox | undefined;
+	const harness = await TspHarness.start(tui => {
+		inbox = new QuestionInbox(fx.actions, tui);
+		tui.showOverlay(inbox, { width: "90%", maxHeight: "90%" });
+	});
+	try {
+		await harness.render();
+		harness.terminal.send("saved draft");
+		harness.flush();
+		const draft = inbox!.debugChildren[0];
+		const tabs = harness.find(node => node.k === "tabs")!;
+		expect(tabs.p).toMatchObject({
+			active: "pending",
+			items: [
+				{ id: "pending", label: "Pending (1)" },
+				{ id: "answered", label: "Answered (1)" },
+			],
+		});
+		expect(harness.find(node => node.k === "card" && node.id.endsWith(`/${answered.id}`))).toBeUndefined();
+		harness.event({ ev: "select", sf: harness.terminal.surface!, id: tabs.id, item: "answered" });
+		expect(inbox!.debugState()).toMatchObject({ tab: "answered", expanded: answered.id, form: null });
+		expect(harness.find(node => node.k === "card" && node.id.endsWith(`/${pending.id}`))).toBeUndefined();
+		expect(harness.find(node => node.k === "card" && node.id.endsWith(`/${answered.id}`))?.p).toMatchObject({
+			tone: "success",
+		});
+		draft?.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
+		expect(fx.store.get(pending.id)?.status).toBe("pending");
+		harness.event({ ev: "select", sf: harness.terminal.surface!, id: tabs.id, item: "pending" });
+		expect(inbox!.debugChildren[0]).toBe(draft);
+		expect(draft?.debugState?.()).toMatchObject({ data: { target: "saved draft" } });
+		expect(fx.closed()).toBe(false);
+		expect(harness.errors).toEqual([]);
+	} finally {
+		inbox?.dispose();
+		harness.stop();
+	}
 });

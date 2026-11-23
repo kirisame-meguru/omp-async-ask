@@ -5,6 +5,7 @@ import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
 import { matchesKey } from "@oh-my-pi/pi-tui/keys";
 import { col, elapsed, node, row, span, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import { segmentedTabs } from "@oh-my-pi/pi-tui/native/overlay";
 import { replaceTabs, truncateToWidth } from "@oh-my-pi/pi-tui/utils";
 import { formatAge, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AnswerNote, Question } from "./state";
@@ -123,6 +124,8 @@ export class QuestionIndicator implements Component {
 	}
 }
 
+type InboxTab = "pending" | "answered";
+
 /** Owns focus only while opened by the user; agent execution has no dependency on this component. */
 export class QuestionInbox implements Component, Focusable {
 	// Keep outside omp.overlay.*: its list padding collides with embedded Ask markers.
@@ -131,6 +134,10 @@ export class QuestionInbox implements Component, Focusable {
 	#selected: string | undefined;
 	#expanded: string | undefined;
 	#initialized = false;
+	#tab: InboxTab = "pending";
+	#remembered: Partial<Record<InboxTab, string>> = {};
+	#hadPending = false;
+	#submitting = false;
 	#forms = new Map<string, HtmlFormDialog>();
 	#skipped = new Set<string>();
 	#confirm: "discard" | "retry" | undefined;
@@ -161,6 +168,7 @@ export class QuestionInbox implements Component, Focusable {
 	}
 	debugState(): Record<string, unknown> {
 		return {
+			tab: this.#tab,
 			selected: this.#selected,
 			expanded: this.#expanded ?? null,
 			form: this.#form ? this.#expanded : null,
@@ -168,9 +176,36 @@ export class QuestionInbox implements Component, Focusable {
 			confirmation: this.#confirm ?? null,
 		};
 	}
-	#sync(): void {
-		if (this.#disposed) return;
+	#visibleQuestions(): readonly Question[] {
+		return this.actions
+			.questions()
+			.filter(question => (this.#tab === "pending" ? question.status === "pending" : question.status !== "pending"));
+	}
+	#first(questions: readonly Question[]): string | undefined {
+		return (
+			questions.find(question => question.delivery === "failed") ??
+			questions.find(question => question.delivery === "unconfirmed") ??
+			questions[0]
+		)?.id;
+	}
+	#switchTab(tab: InboxTab): void {
+		if (this.#tab === tab) return;
+		this.#remembered[this.#tab] = this.#expanded ?? this.#selected;
+		this.#expand(undefined);
+		this.#tab = tab;
+		this.#message = "";
+		const questions = this.#visibleQuestions();
+		const remembered = this.#remembered[tab];
+		this.#selected = questions.some(question => question.id === remembered) ? remembered : this.#first(questions);
+		this.#expand(this.#selected);
+		this.#refresh();
+	}
+	#sync(autoClose = true): void {
+		if (this.#disposed || this.#submitting) return;
 		const questions = this.actions.questions();
+		const pending = questions.some(question => question.status === "pending");
+		const finished = this.#hadPending && !pending;
+		this.#hadPending = pending;
 		let advanceFrom: string | undefined;
 		for (const [id, form] of this.#forms) {
 			const current = questions.find(question => question.id === id);
@@ -183,23 +218,22 @@ export class QuestionInbox implements Component, Focusable {
 			this.#forms.delete(id);
 			this.#skipped.delete(id);
 		}
+		if (finished && autoClose) {
+			this.#finishClose();
+			return;
+		}
 		if (!this.#initialized && questions.length) {
 			this.#initialized = true;
-			this.#expand(
-				(
-					questions.find(question => question.status === "pending") ??
-					questions.find(question => question.delivery === "failed") ??
-					questions.find(question => question.delivery === "unconfirmed") ??
-					questions[0]
-				)?.id,
-			);
+			this.#tab = pending ? "pending" : "answered";
+			this.#expand(this.#first(this.#visibleQuestions()));
 		} else if (advanceFrom) {
 			this.#confirm = undefined;
-			this.#expand(this.#nextPending(advanceFrom));
-		} else if (this.#expanded && !questions.some(question => question.id === this.#expanded)) {
+			this.#expand(this.#tab === "pending" ? this.#nextPending(advanceFrom) : this.#first(this.#visibleQuestions()));
+		} else if (this.#expanded && !this.#visibleQuestions().some(question => question.id === this.#expanded)) {
 			this.#expand(undefined);
 		}
-		if (!questions.some(question => question.id === this.#selected)) this.#selected = questions[0]?.id;
+		const visible = this.#visibleQuestions();
+		if (!visible.some(question => question.id === this.#selected)) this.#selected = visible[0]?.id;
 		this.#refresh();
 	}
 	#nextPending(after: string, includeSkipped = true): string | undefined {
@@ -239,12 +273,22 @@ export class QuestionInbox implements Component, Focusable {
 					// Detached forms keep drafts, not permission to submit a stale answer.
 					if (this.#disposed || this.#confirm || this.#expanded !== id) return;
 					if (this.actions.questions().find(current => current.id === id)?.status !== "pending") return;
+					this.#submitting = true;
+					let failure: string | undefined;
 					try {
 						this.actions.submit(id, data, notes);
 					} catch (error) {
-						this.#message = String(error);
+						failure = String(error);
+					} finally {
+						this.#submitting = false;
 					}
-					this.#sync();
+					this.#sync(failure === undefined);
+					if (failure !== undefined) {
+						if (this.actions.questions().find(question => question.id === id)?.status === "answered")
+							this.#switchTab("answered");
+						this.#message = failure;
+						this.#refresh();
+					}
 				},
 				onCancel: () => {
 					if (!this.#disposed && this.#expanded === id && !this.#confirm) this.#skip();
@@ -266,16 +310,21 @@ export class QuestionInbox implements Component, Focusable {
 		this.#expand(this.#nextPending(previous, false));
 		this.#refresh();
 	}
+	#finishClose(): void {
+		if (this.#disposed) return;
+		this.dispose();
+		this.actions.close();
+	}
 	#close(): void {
 		if ([...this.#forms.values()].some(form => form.givenAnswers())) {
 			this.#confirm = "discard";
 			if (this.#form) this.#form.focused = false;
 			this.#refresh();
-		} else this.actions.close();
+		} else this.#finishClose();
 	}
 	#acceptConfirmation(): void {
 		if (this.#confirm === "discard") {
-			this.actions.close();
+			this.#finishClose();
 			return;
 		}
 		if (this.#confirm === "retry" && this.#expanded) {
@@ -306,8 +355,10 @@ export class QuestionInbox implements Component, Focusable {
 		if (this.#confirm) {
 			if (matchesKey(data, "enter")) this.#acceptConfirmation();
 			else if (matchesKey(data, "escape")) this.#cancelConfirmation();
+		} else if (matchesKey(data, "ctrl+left") || matchesKey(data, "ctrl+right")) {
+			this.#switchTab(this.#tab === "pending" ? "answered" : "pending");
 		} else if (matchesKey(data, "ctrl+down") || matchesKey(data, "ctrl+up")) {
-			const questions = this.actions.questions();
+			const questions = this.#visibleQuestions();
 			const index = questions.findIndex(question => question.id === this.#selected);
 			const next = index + (matchesKey(data, "ctrl+up") ? -1 : 1);
 			this.#expand(questions[Math.max(0, Math.min(questions.length - 1, next))]?.id);
@@ -316,7 +367,7 @@ export class QuestionInbox implements Component, Focusable {
 		else if (data === "r") this.#retry();
 		else if (matchesKey(data, "enter")) this.#expand(this.#expanded === this.#selected ? undefined : this.#selected);
 		else if (matchesKey(data, "up") || matchesKey(data, "down")) {
-			const questions = this.actions.questions();
+			const questions = this.#visibleQuestions();
 			const index = questions.findIndex(question => question.id === this.#selected);
 			this.#selected =
 				questions[Math.max(0, Math.min(questions.length - 1, index + (matchesKey(data, "up") ? -1 : 1)))]?.id;
@@ -328,10 +379,15 @@ export class QuestionInbox implements Component, Focusable {
 		if (this.#confirm) {
 			if (event.type === "action" && event.act === "confirm") this.#acceptConfirmation();
 			else if (event.type === "action" && event.act === "keep") this.#cancelConfirmation();
+		} else if (
+			(event.type === "select" || event.type === "activate") &&
+			(event.key === "inbox-tabs" || event.key.endsWith("/inbox-tabs"))
+		) {
+			if (event.item === "pending" || event.item === "answered") this.#switchTab(event.item);
 		} else if (event.type === "toggle") {
-			const question = this.actions
-				.questions()
-				.find(candidate => event.key === candidate.id || event.key.endsWith(`/${candidate.id}`));
+			const question = this.#visibleQuestions().find(
+				candidate => event.key === candidate.id || event.key.endsWith(`/${candidate.id}`),
+			);
 			if (question) {
 				if (!event.collapsed) this.#expand(question.id);
 				else if (this.#expanded === question.id) this.#expand(undefined);
@@ -348,12 +404,20 @@ export class QuestionInbox implements Component, Focusable {
 			: "Delivery is unconfirmed. Retrying may deliver the answer twice.";
 	}
 	render(width: number): readonly string[] {
-		const lines = ["Questions · agent work continues", ""];
+		const all = this.actions.questions();
+		const pending = all.filter(question => question.status === "pending").length;
+		const answered = all.filter(question => question.status === "answered").length;
+		const lines = [
+			"Questions · agent work continues",
+			`${this.#tab === "pending" ? ">" : " "} Pending (${pending})  |  ${this.#tab === "answered" ? ">" : " "} Answered (${answered})`,
+			"",
+		];
 		if (this.#confirm) {
 			lines.push(this.#confirmationText(), "Enter confirms · Esc keeps the current state");
 		} else {
-			const questions = this.actions.questions();
-			if (!questions.length) lines.push("All clear. New questions will appear here.");
+			const questions = this.#visibleQuestions();
+			if (!questions.length)
+				lines.push(this.#tab === "pending" ? "No pending questions." : "No answered questions yet.");
 			const count = Math.max(3, (this.host?.terminal.rows ?? 30) - 12);
 			const index = questions.findIndex(question => question.id === this.#selected);
 			const start = Math.max(0, index - count + 1);
@@ -370,7 +434,10 @@ export class QuestionInbox implements Component, Focusable {
 				if (question.answer)
 					lines.push(JSON.stringify(question.answer.data), ...question.answer.notes.map(note => note.text));
 			}
-			lines.push("", "Ctrl+↑/↓ question · Esc folds, then closes · Enter expands · r retries unconfirmed");
+			lines.push(
+				"",
+				"Ctrl+←/→ tab · Ctrl+↑/↓ question · Esc folds, then closes · Enter expands · r retries unconfirmed",
+			);
 		}
 		if (this.#message) lines.push("", this.#message);
 		lines.push(...this.actions.errors());
@@ -440,15 +507,19 @@ export class QuestionInbox implements Component, Focusable {
 		const questions = this.actions.questions();
 		const pending = questions.filter(question => question.status === "pending").length;
 		const answered = questions.filter(question => question.status === "answered").length;
+		const visible = this.#visibleQuestions();
 		const body: NativeChild[] = [
 			row(
 				[
-					row(
-						[
-							node("badge", { text: `${pending} pending`, tone: pending ? "pending" : "muted" }),
-							node("badge", { text: `${answered} answered`, tone: answered ? "success" : "muted" }),
-						],
-						{ gap: "sm", wrap: true },
+					segmentedTabs(
+						{
+							items: [
+								{ id: "pending", label: `Pending (${pending})` },
+								{ id: "answered", label: `Answered (${answered})` },
+							],
+							active: this.#tab,
+						},
+						"inbox-tabs",
 					),
 					node("button", { text: "Close", icon: "x", actions: { click: "close" } }),
 				],
@@ -472,10 +543,10 @@ export class QuestionInbox implements Component, Focusable {
 					),
 				]),
 			);
-		} else if (questions.length) {
+		} else if (visible.length) {
 			body.push(
 				col(
-					questions.map(q => this.#card(q)),
+					visible.map(q => this.#card(q)),
 					{ gap: "sm" },
 				),
 			);
@@ -485,7 +556,11 @@ export class QuestionInbox implements Component, Focusable {
 					[
 						node("icon", { name: "inbox", tone: "muted" }),
 						col(
-							[text([span("All clear", "strong")]), text("New questions will appear here.", { tone: "muted" })],
+							[
+								text(this.#tab === "pending" ? "No pending questions." : "No answered questions yet.", {
+									tone: "muted",
+								}),
+							],
 							{ gap: "sm" },
 						),
 					],
