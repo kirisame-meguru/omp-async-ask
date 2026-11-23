@@ -105,6 +105,16 @@ The waiting indicator uses an independently owned [OSC 7501](https://www.superlo
 | `Up` / `Down`, then `Enter` | Select and expand folded cards |
 | `r` | Open explicit resend confirmation when available, outside an active form |
 
+### Optional Away integration
+
+Load updated Async Ask and Away plugins in the same interactive desktop, with Away's mobile gateway configured and a phone already paired. Pending questions—including restored questions—appear in Away's phone inbox without opening `/questions` or blocking independent work. Async forwarding does not require Collab; native Ask forwarding still does.
+
+Answer through Away's existing spoken selection, readback and separate confirmation. Async Ask remains responsible for validation, saving and the ordinary user-attributed answer aside. Desktop answers, withdrawal and session changes revoke old phone offers.
+
+Away's shared routing settings remain unchanged; restored fallback delays use the question's original creation time. Unsupported forms stay in `/questions`. After an invalid or uncertain mobile attempt, finish or review the question there; nothing is automatically retried. Call termination alone is not proof of delivery.
+
+Either plugin still works without the other. Restart the desktop after updating linked source; no new Async Ask service or configuration is needed.
+
 ## Safety and delivery
 
 - **Only explicit submissions count.** Silence, skipped questions, and preselected defaults are never treated as answers or consent.
@@ -149,6 +159,7 @@ Use the control port of that isolated window, not a live working session.
 | [`src/index.ts`](src/index.ts) | Tool, command, session lifecycle, and widget visibility |
 | [`src/ui.ts`](src/ui.ts) | Native and ordinary-terminal inbox, forms, tabs, and drafts |
 | [`src/state.ts`](src/state.ts) · [`src/delivery.ts`](src/delivery.ts) | Session history, answer dispatch, and receipt reconciliation |
+| [`src/bridge.ts`](src/bridge.ts) | Optional, session-owned question capabilities for trusted integrations such as Away |
 | [`src/attention.ts`](src/attention.ts) | Native session waiting-state indicator |
 | [`src/prompts/`](src/prompts/) | Static model-facing instructions and goal-persistence policy |
 | [`test/`](test/) | Regression tests, native surface harness, and acceptance fixtures |

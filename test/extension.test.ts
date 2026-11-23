@@ -15,6 +15,8 @@ import type { Component } from "@oh-my-pi/pi-tui";
 import * as terminal from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import asyncAsk from "../src/index";
+import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
+import { AVAILABLE, CONNECT, type AsyncQuestion, type QuestionSource } from "../src/bridge";
 import goalPolicy from "../src/prompts/goal-policy.md" with { type: "text" };
 import { EVENT_TYPE, type QuestionEvent } from "../src/state";
 import { QuestionInbox } from "../src/ui";
@@ -73,9 +75,11 @@ function fixture() {
 		ui,
 		sessionManager: { getSessionId: () => sessionId, getBranch: () => log.entries },
 		isIdle: () => false,
+		setTimeout: (callback: () => void) => setTimeout(callback, 0),
 		hasPendingMessages: () => false,
 	} as unknown as ExtensionContext;
 	const api = {
+		events: new EventBus(),
 		arktype,
 		logger,
 		registerTool: (tool: ToolDefinition) => tools.push(tool),
@@ -95,6 +99,7 @@ function fixture() {
 	asyncAsk(api);
 	cleanupFixtures.push(() => handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx));
 	return {
+		events: api.events,
 		ctx,
 		log,
 		tools,
@@ -119,6 +124,37 @@ function fixture() {
 		widget: () => widget,
 	};
 }
+
+test("source discovery works before or after owner startup and survives completed agent turns", async () => {
+	for (const early of [true, false]) {
+		const fx = fixture();
+		let source: QuestionSource | undefined;
+		let pending: readonly AsyncQuestion[] = [];
+		const connect = () => fx.events.emit(CONNECT, {
+			version: 1, sessionId: "a",
+			accept(next: QuestionSource) {
+				source = next;
+				next.subscribe(questions => { pending = questions; });
+			},
+		});
+		const off = fx.events.on(AVAILABLE, connect);
+		if (early) connect();
+		await fx.emit("session_start");
+		if (!early) connect();
+		await fx.tools[0]!.execute("bridge-question", { op: "create", ...input }, undefined, undefined, fx.ctx);
+		await fx.emit("agent_end", { willContinue: false });
+		expect(pending.map(question => question.toolCallId)).toEqual(["bridge-question"]);
+		expect(fx.opened()).toBe(0);
+		const cap = pending[0]!;
+		await fx.emit("session_before_tree");
+		expect(source!.signal.aborted).toBe(true);
+		expect(cap.submitConfirmed({ target: "old" })).toEqual({ kind: "stale" });
+		await fx.emit("session_tree");
+		expect(pending[0]!.submitConfirmed({ target: "fresh" }).kind).toBe("accepted");
+		expect(fx.sent).toHaveLength(1);
+		off();
+	}
+});
 
 test("policy appends before any question without mutating or accumulating on the host prompt", async () => {
 	const fx = fixture();

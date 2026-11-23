@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
+import { AVAILABLE, createQuestionSource, serveQuestionSources, type OwnedQuestionSource } from "./bridge";
 import { AnswerDelivery } from "./delivery";
 import contextTemplate from "./prompts/context.md" with { type: "text" };
 import goalPolicy from "./prompts/goal-policy.md" with { type: "text" };
@@ -20,6 +21,7 @@ interface Connection {
 	delivery: AnswerDelivery;
 	attention: QuestionAttention;
 	unsubscribeWidget?: () => void;
+	source?: OwnedQuestionSource;
 	overlay?: AbortController;
 }
 function supported(ctx: ExtensionContext): boolean {
@@ -28,11 +30,17 @@ function supported(ctx: ExtensionContext): boolean {
 
 export default function asyncAsk(pi: ExtensionAPI): void {
 	let connection: Connection | undefined;
+	let stopServing: (() => void) | undefined;
+	function serve() {
+		stopServing ??= serveQuestionSources(pi.events, () => connection?.source);
+	}
+	serve();
 	function invalidate(): void {
 		const previous = connection;
 		connection = undefined;
 		if (!previous) return;
 		previous.unsubscribeWidget?.();
+		previous.source?.close();
 		previous.delivery.dispose();
 		previous.attention.dispose();
 		previous.overlay?.abort();
@@ -55,6 +63,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 			);
 		if (connection?.store.sessionId === ctx.sessionManager.getSessionId()) return connection;
 		invalidate();
+		serve();
 		const sessionId = ctx.sessionManager.getSessionId();
 		const store = new QuestionStore(sessionId, event => {
 			if (connection?.store !== store || ctx.sessionManager.getSessionId() !== sessionId) {
@@ -72,6 +81,8 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		});
 		const owner: Connection = { ctx, store, delivery, attention: new QuestionAttention(store) };
 		connection = owner;
+		owner.source = createQuestionSource(store, delivery, () => connection === owner && ctx.sessionManager.getSessionId() === sessionId);
+		pi.events.emit(AVAILABLE, { version: 1, sessionId });
 		let widgetVisible = false;
 		const syncWidget = () => {
 			const pending = store.list().some(question => question.status === "pending");
@@ -211,7 +222,11 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 	pi.on("session_before_switch", invalidate);
 	pi.on("session_before_branch", invalidate);
 	pi.on("session_before_tree", invalidate);
-	pi.on("session_shutdown", invalidate);
+	pi.on("session_shutdown", () => {
+		invalidate();
+		stopServing?.();
+		stopServing = undefined;
+	});
 	pi.on("before_agent_start", (event, ctx) => {
 		if (!supported(ctx)) return;
 		return { systemPrompt: [...event.systemPrompt, goalPolicy] };

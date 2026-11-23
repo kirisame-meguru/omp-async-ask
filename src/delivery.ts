@@ -3,7 +3,7 @@ import type { CustomMessagePayload, SessionEntry } from "@oh-my-pi/pi-coding-age
 import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
 import { prompt } from "@oh-my-pi/pi-utils";
 import answerTemplate from "./prompts/answer.md" with { type: "text" };
-import { ANSWER_TYPE, type AnswerNote, type Question, type QuestionStore } from "./state";
+import { ANSWER_TYPE, type AnswerNote, type DeliveryState, type Question, type QuestionStore } from "./state";
 
 export interface DeliveryPort {
 	sessionId(): string;
@@ -11,6 +11,12 @@ export interface DeliveryPort {
 	hasPendingMessages?(): boolean;
 	entries(): readonly SessionEntry[];
 	send(message: CustomMessagePayload, options: { deliverAs: "aside" }): void;
+}
+
+export interface SubmissionReceipt {
+	answerId: string;
+	delivery: DeliveryState;
+	failure?: { error: unknown };
 }
 
 /** Explicit user actions dispatch answers. Lifecycle observations never start turns. */
@@ -27,9 +33,22 @@ export class AnswerDelivery {
 		if (!this.#current()) throw new Error("This inbox belongs to an inactive session. Reopen /questions.");
 	}
 	submit(id: string, data: HtmlFormData, notes: AnswerNote[]): void {
+		const receipt = this.submitWithReceipt(id, data, notes);
+		if (receipt.failure) throw receipt.failure.error;
+	}
+	submitWithReceipt(id: string, data: HtmlFormData, notes: AnswerNote[]): SubmissionReceipt {
 		this.#assertCurrent();
 		const question = this.store.submit(id, data, notes);
-		this.#send(question);
+		const answerId = question.answer!.id;
+		let failure: SubmissionReceipt["failure"];
+		try {
+			this.#send(question);
+		} catch (error) {
+			failure = { error };
+		}
+		const observed = this.store.get(id);
+		const delivery = observed?.answer?.id === answerId ? observed.delivery ?? "submitted" : "unconfirmed";
+		return { answerId, delivery, ...(failure ? { failure } : {}) };
 	}
 	#reconcile(): void {
 		for (const entry of this.port.entries()) this.store.observeEntry(entry);
