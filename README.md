@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/hero.png" alt="omp-async-ask — a non-blocking question inbox for oh-my-pi" width="1200">
+</p>
+
 > ### Better together with [omp-away](https://github.com/kirisame-meguru/omp-away)
 >
 > **Step away from the keyboard—not the conversation.**
@@ -7,10 +11,6 @@
 > *Integration in development. omp-away is optional; Async Ask works standalone.*
 
 ---
-
-<p align="center">
-  <img src="assets/hero.png" alt="omp-async-ask — a non-blocking question inbox for oh-my-pi" width="1200">
-</p>
 
 <p align="center"><strong>Ask now. Keep moving.</strong></p>
 
