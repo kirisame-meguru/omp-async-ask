@@ -19,7 +19,7 @@
 
 ---
 
-> **Better with [omp-away](https://github.com/kirisame-meguru/omp-away)** — Answer by voice from your phone while independent work continues. *Optional integration, in development.*
+> **Better with [omp-away](https://github.com/kirisame-meguru/omp-away)** — Answer by voice from your phone while independent work continues. *Optional companion.*
 
 ---
 
