@@ -82,7 +82,13 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		});
 		const owner: Connection = { ctx, store, delivery, attention: new QuestionAttention(store) };
 		connection = owner;
-		owner.source = createQuestionSource(store, delivery, () => connection === owner && ctx.sessionManager.getSessionId() === sessionId);
+		owner.source = createQuestionSource(store, delivery, () => connection === owner && ctx.sessionManager.getSessionId() === sessionId, (question, reason) => {
+			if (connection !== owner || ctx.sessionManager.getSessionId() !== sessionId) return;
+			pi.sendMessage({
+				customType: "omp-away:call-result", display: true, attribution: "agent",
+				content: JSON.stringify({ question: question.id, title: question.title, voiceDiscussion: reason }),
+			}, { deliverAs: "aside" });
+		});
 		pi.events.emit(AVAILABLE, { version: 1, sessionId });
 		let widgetVisible = false;
 		const syncWidget = () => {
