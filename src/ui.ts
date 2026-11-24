@@ -28,7 +28,7 @@ function status(question: Question): string {
 	return question.delivery === "failed" ? "Answered · send failed" : "Answered";
 }
 
-/** Adapt only public action-button descriptors; keep the SDK's fields, validation and event routing. */
+/** Adapt native chrome only; retain the SDK's fields, validation and event ownership. */
 function inboxFormNode(description: NativeNode): NativeNode {
 	if (description.k === "button" && description.p?.role === "omp.btn") {
 		const cancel = description.p.actions?.click === "cancel" && description.p.text === "Cancel";
@@ -51,12 +51,25 @@ function inboxFormNode(description: NativeNode): NativeNode {
 			},
 		};
 	}
-	return description.c
-		? { ...description, c: description.c.map(child => ("k" in child ? inboxFormNode(child) : child)) }
-		: description;
+	const children = description.c
+		?.filter(child => !("k" in child) || child.p?.role !== "omp.ask.card.head")
+		.map(child => ("k" in child ? inboxFormNode(child) : child));
+	const role = description.p?.role;
+	if (description.k === "col" && (role === "omp.ask.card" || role === "omp.ask.card.body" || role === "omp.ask.open")) {
+		return {
+			...description,
+			p: { ...description.p, role: "async-ask.form", gap: "sm" },
+			c: children,
+			reveal: undefined,
+		};
+	}
+	if (description.k === "row" && role === "omp.ask.pills") {
+		return { ...description, k: "col", p: { role: "async-ask.options", gap: "xs" }, c: children };
+	}
+	return children ? { ...description, c: children } : description;
 }
 
-class InboxForm extends HtmlFormDialog {
+export class InboxForm extends HtmlFormDialog {
 	#source: NativeNode | undefined;
 	#adapted: NativeNode | undefined;
 	override describe(context: DescribeContext): NativeNode {

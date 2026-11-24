@@ -11,7 +11,7 @@ import type {
 	ToolDefinition,
 } from "@oh-my-pi/pi-coding-agent";
 import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import type { Component } from "@oh-my-pi/pi-tui";
+import type { Component, TUI } from "@oh-my-pi/pi-tui";
 import type { MessageRenderer } from "@oh-my-pi/pi-tui/chat/extension-types";
 import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
 import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
@@ -25,6 +25,7 @@ import { AVAILABLE, CONNECT, type AsyncQuestion, type QuestionSource } from "../
 import goalPolicy from "../src/prompts/goal-policy.md" with { type: "text" };
 import { ANSWER_TYPE, EVENT_TYPE, type QuestionEvent } from "../src/state";
 import { QuestionInbox } from "../src/ui";
+import { QuestionPanel } from "../src/panel";
 import { input, journal } from "./helpers";
 
 beforeAll(async () => {
@@ -36,7 +37,7 @@ afterEach(async () => {
 });
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
-function fixture() {
+function fixture(nativeHost?: TUI) {
 	const log = journal();
 	const handlers = new Map<string, Handler>();
 	const tools: ToolDefinition[] = [];
@@ -53,9 +54,11 @@ function fixture() {
 	let widget: (Component & { dispose?: () => void }) | undefined;
 	const ui = {
 		setWidget: (_key: string, content: Parameters<ExtensionUIContext["setWidget"]>[1]) => {
+			if (nativeHost && widget) nativeHost.removeChild(widget);
 			widget?.dispose?.();
 			widget =
-				typeof content === "function" ? content({ requestRender: () => {} } as never, {} as never) : undefined;
+				typeof content === "function" ? content(nativeHost ?? { requestRender: () => {} } as never, {} as never) : undefined;
+			if (nativeHost && widget) nativeHost.addChild(widget);
 		},
 		notify: () => {},
 		custom: (factory: Parameters<ExtensionUIContext["custom"]>[0], options?: { signal?: AbortSignal }) => {
@@ -304,6 +307,26 @@ test("Questions widget exists only while pending; the command still opens answer
 	expect(fx.widget()).toBeUndefined();
 });
 
+test("native command opens the same retained dock panel without creating a modal", async () => {
+	const harness = await TspHarness.start();
+	try {
+		const fx = fixture(harness.tui);
+		await fx.emit("session_start");
+		const created = await fx.tools[0]!.execute("one", { op: "create", ...input }, undefined, undefined, fx.ctx);
+		const widget = fx.widget();
+		expect(widget).toBeInstanceOf(QuestionPanel);
+		await fx.commands.get("questions")!.handler("", fx.ctx);
+		expect(fx.opened()).toBe(0);
+		expect(fx.widget()).toBe(widget);
+		await fx.tools[0]!.execute("withdraw", { op: "withdraw", id: arktype({ id: "string" }).assert(created.details).id, reason: "Resolved" }, undefined, undefined, fx.ctx);
+		expect(fx.widget()).toBe(widget);
+		await fx.emit("session_before_switch");
+		expect(fx.widget()).toBeUndefined();
+		widget?.handleNativeEvent?.({ type: "toggle", key: "panel", collapsed: true });
+		expect(fx.sent).toEqual([]);
+	} finally { harness.stop(); }
+});
+
 test("switch invalidates an open inbox and does not inherit its pending questions", async () => {
 	const fx = fixture();
 	await fx.emit("session_start");
@@ -353,8 +376,8 @@ test("pending questions own a native attention record until answered or withdraw
 	const writer = spyOn(terminal, "writeTerminalSequence").mockImplementation(data => {
 		reports.push(data);
 	});
-	const fx = fixture();
-	terminal.setNativeRendering(true);
+	const harness = await TspHarness.start();
+	const fx = fixture(harness.tui);
 	try {
 		await fx.emit("session_start");
 		expect(reports).toEqual([]);
@@ -369,20 +392,19 @@ test("pending questions own a native attention record until answered or withdraw
 		const firstId = arktype({ id: "string" }).assert(first.details).id;
 		await tool.execute("withdraw", { op: "withdraw", id: firstId, reason: "Resolved" }, undefined, undefined, fx.ctx);
 		expect(reports).toHaveLength(1);
-		const opening = fx.commands.get("questions")!.handler("", fx.ctx);
-		const inbox = fx.component();
-		if (!(inbox instanceof QuestionInbox)) throw new Error("Expected the real question inbox");
-		inbox.handleInput("staging");
-		inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
-		// Use the native form's real action path, not a fabricated store transition.
+		await fx.commands.get("questions")!.handler("", fx.ctx);
+		await harness.render();
+		const form = harness.find(node => node.k === "input")!;
+		harness.event({ ev: "edit", sf: harness.terminal.surface!, id: form.id, from: 0, to: 0, text: "staging", cursor: 7, len: 0 });
+		const submit = harness.find(node => node.k === "button" && node.p?.actions?.click === "submit")!;
+		harness.event({ ev: "action", sf: harness.terminal.surface!, id: submit.id, act: "submit", mods: [] });
 		expect(fx.sent).toHaveLength(1);
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
-		// The final answer closes the real extension overlay without a shutdown event.
-		await opening;
+		expect(fx.opened()).toBe(0);
 		await fx.emit("session_shutdown");
 	} finally {
 		await fx.emit("session_shutdown");
-		terminal.setNativeRendering(false);
+		harness.stop();
 		writer.mockRestore();
 	}
 });
@@ -429,17 +451,17 @@ test("native attention follows rendering availability, restored questions and se
 });
 
 test("Tern question cards hide transport payloads and open the real inbox", async () => {
-	const fx = fixture();
+	const harness = await TspHarness.start();
+	const fx = fixture(harness.tui);
 	await fx.emit("session_start");
 	const tool = fx.tools[0]!;
 	const args = { op: "create", ...input };
 	const result = await tool.execute("native-question", args, undefined, undefined, fx.ctx);
-	const harness = await TspHarness.start(tui => {
-		const card = new ToolExecutionComponent(tool.name, args, {}, tool as unknown as AgentTool, tui);
-		card.setArgsComplete();
-		card.updateResult(result);
-		tui.addChild(card);
-	});
+	const card = new ToolExecutionComponent(tool.name, args, {}, tool as unknown as AgentTool, harness.tui);
+	card.setArgsComplete();
+	card.updateResult(result);
+	harness.tui.addChild(card);
+	await harness.render();
 	try {
 		const drawn = JSON.stringify(harness.doc());
 		expect(drawn).toContain(input.title);
@@ -453,7 +475,8 @@ test("Tern question cards hide transport payloads and open the real inbox", asyn
 		expect(actionGroup?.k === "col" ? actionGroup.p?.gap : undefined).toBe("sm");
 		expect(actionGroup?.c?.[0]?.k).toBe("col");
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
-		expect(fx.opened()).toBe(1);
+		expect(fx.opened()).toBe(0);
+		expect(fx.widget()).toBeInstanceOf(QuestionPanel);
 		expect(harness.errors).toEqual([]);
 		let source: QuestionSource | undefined;
 		fx.events.emit(CONNECT, { version: 1, sessionId: "a", accept: (value: QuestionSource) => { source = value; } });
@@ -467,7 +490,7 @@ test("Tern question cards hide transport payloads and open the real inbox", asyn
 		fx.switchSession();
 		await fx.emit("session_switch");
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
-		expect(fx.opened()).toBe(1);
+		expect(fx.opened()).toBe(0);
 	} finally {
 		harness.stop();
 	}

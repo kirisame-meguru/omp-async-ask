@@ -1,9 +1,11 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
 import { isRecord, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
 import { AVAILABLE, createQuestionSource, serveQuestionSources, type OwnedQuestionSource } from "./bridge";
 import { AnswerDelivery } from "./delivery";
 import { AnswerCard, questionRenderers, savedAnswerPresentation, summarizeAnswer } from "./presentation";
+import { QuestionPanel } from "./panel";
 import contextTemplate from "./prompts/context.md" with { type: "text" };
 import goalPolicy from "./prompts/goal-policy.md" with { type: "text" };
 import receiptTemplate from "./prompts/receipt.md" with { type: "text" };
@@ -24,6 +26,7 @@ interface Connection {
 	unsubscribeWidget?: () => void;
 	source?: OwnedQuestionSource;
 	overlay?: AbortController;
+	panel?: QuestionPanel;
 }
 function supported(ctx: ExtensionContext): boolean {
 	return ctx.mode === "tui" && ctx.hasUI && ctx.agent.kind === "main";
@@ -92,21 +95,27 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		pi.events.emit(AVAILABLE, { version: 1, sessionId });
 		let widgetVisible = false;
 		const syncWidget = () => {
+			// Native history and drafts live with the session, not the pending count.
+			if (owner.panel) return;
 			const pending = store.list().some(question => question.status === "pending");
 			if (pending === widgetVisible) return;
 			widgetVisible = pending;
 			ctx.ui.setWidget(
 				WIDGET,
 				pending
-					? tui =>
-							new QuestionIndicator(
+					? tui => {
+							if (tui.nativeRendering) {
+								return owner.panel = new QuestionPanel(actions(owner, () => {}), tui, ctx.cwd);
+							}
+							return new QuestionIndicator(
 								actions(owner, () => {}),
 								() => {
 									if (connection !== owner) return;
 									void open(ctx).catch(error => ctx.ui.notify(String(error), "error"));
 								},
 								tui,
-							)
+							);
+						}
 					: undefined,
 			);
 		};
@@ -118,6 +127,13 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const owner = ensure(ctx);
 		if (owner.overlay) return;
 		owner.delivery.settle();
+		if (isNativeRendering()) {
+			if (!owner.panel) {
+				ctx.ui.setWidget(WIDGET, tui => owner.panel = new QuestionPanel(actions(owner, () => {}), tui, ctx.cwd));
+			}
+			owner.panel?.open();
+			return;
+		}
 		const abort = new AbortController();
 		owner.overlay = abort;
 		let inbox: QuestionInbox | undefined;
