@@ -38,16 +38,13 @@ function inboxFormNode(description: NativeNode): NativeNode {
 			...description,
 			p: {
 				...description.p,
-				role: "async-ask.button",
-				variant: submit ? "primary" : "default",
 				...(cancel
 					? {
 							text: "Skip for now",
-							icon: "clock",
 							title: "Leave pending; keep this draft while the inbox stays open",
 						}
 					: submit
-						? { text: "Send answer", icon: "check", title: "Submit this answer to the agent" }
+						? { text: "Send answer", title: "Submit this answer to the agent" }
 						: {}),
 			},
 		};
@@ -59,7 +56,6 @@ function inboxFormNode(description: NativeNode): NativeNode {
 	if (description.k === "col" && (role === "omp.ask.card" || role === "omp.ask.card.body" || role === "omp.ask.open")) {
 		return {
 			...description,
-			p: { ...description.p, role: "async-ask.form", gap: "sm" },
 			c: children,
 			reveal: undefined,
 		};
@@ -70,38 +66,45 @@ function inboxFormNode(description: NativeNode): NativeNode {
 	return children ? { ...description, c: children } : description;
 }
 
-// Scope presentation to our forms; SDK inputs still own editing, focus and validation.
+// Keep the SDK's Ask roles: they supply the native field metrics and typography.
+// Only redundant frames are removed; prose outside the form uses the same UI face.
 const FORM_STYLES = "\x1b_tsp;s;" + JSON.stringify({
 	name: "async-ask-fields",
 	css: `
-[data-role='async-ask.form'] .sf-input,
-[data-role='async-ask.form'] .sf-editor {
+[data-role^='async-ask.'],
+[data-role^='async-ask.'] .sf-text,
+[data-role^='async-ask.'] .sf-card-head,
+[data-role^='async-ask.'] .sf-elapsed {
 	font-family: var(--sans);
-	border-radius: var(--r-panel);
-	background: var(--card);
-	outline: none;
-	box-shadow: inset 0 0 0 1px var(--l2);
 }
-[data-role='async-ask.form'] .sf-input.focused,
-[data-role='async-ask.form'] .sf-editor.focused {
-	box-shadow: inset 0 0 0 1px var(--accent);
+[data-role='async-ask.form'] [data-role='omp.ask.card'],
+[data-role='async-ask.form'] [data-role='omp.ask.card.body'],
+[data-role='async-ask.form'] [data-role='omp.ask.open'] {
+	border: none;
+	background: none;
+	box-shadow: none;
+	padding: 0;
+	margin: 0;
 }
 `,
 }) + "\x1b\\";
+
+export function applyQuestionStyles(context: DescribeContext): boolean {
+	if (!context.feature("styles")) return false;
+	writeTerminalSequence(FORM_STYLES);
+	return true;
+}
 
 export class InboxForm extends HtmlFormDialog {
 	#source: NativeNode | undefined;
 	#adapted: NativeNode | undefined;
 	#styled = false;
 	override describe(context: DescribeContext): NativeNode {
-		if (!this.#styled && context.feature("styles")) {
-			writeTerminalSequence(FORM_STYLES);
-			this.#styled = true;
-		}
+		if (!this.#styled) this.#styled = applyQuestionStyles(context);
 		const source = super.describe(context);
 		if (source !== this.#source) {
 			this.#source = source;
-			this.#adapted = inboxFormNode(source);
+			this.#adapted = col([inboxFormNode(source)], { role: "async-ask.form" });
 		}
 		return this.#adapted!;
 	}

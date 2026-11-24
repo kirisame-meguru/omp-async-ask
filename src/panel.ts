@@ -5,7 +5,7 @@ import { col, elapsed, node, row, text } from "@oh-my-pi/pi-tui/native/describe"
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Question } from "./state";
-import { InboxForm, type InboxActions } from "./ui";
+import { applyQuestionStyles, InboxForm, type InboxActions } from "./ui";
 
 export interface PanelHost extends HtmlFormHost, Pick<TUI, "getFocused" | "setFocus"> {}
 
@@ -53,6 +53,7 @@ export class QuestionPanel implements Component {
 	#rows = 0;
 	#scrollVersion = 0;
 	#native: NativeNode | undefined;
+	#styled = false;
 
 	constructor(
 		readonly actions: InboxActions,
@@ -257,7 +258,8 @@ export class QuestionPanel implements Component {
 		return node("card", { role: "async-ask.question" }, body, question.id);
 	}
 
-	describe(): NativeNode {
+	describe(context: DescribeContext): NativeNode {
+		if (!this.#styled) this.#styled = applyQuestionStyles(context);
 		if (this.#native && this.#rows === this.host.terminal.rows) return this.#native;
 		this.#rows = this.host.terminal.rows;
 		const questions = this.actions.questions();

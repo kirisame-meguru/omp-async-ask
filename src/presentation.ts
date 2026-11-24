@@ -1,10 +1,11 @@
 import { Text, type Component } from "@oh-my-pi/pi-tui";
 import { parseHtmlForm, spansText } from "@oh-my-pi/pi-tui/html-form/parse";
 import { card, col, node, span, text } from "@oh-my-pi/pi-tui/native/describe";
-import type { NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
+import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import type { NativeToolView, RenderResultOptions, ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Question } from "./state";
+import { applyQuestionStyles } from "./ui";
 
 function clean(value: string): string {
 	return sanitizeText(value).replaceAll("\t", "    ");
@@ -51,6 +52,7 @@ export function savedAnswerPresentation(details: unknown): AnswerPresentation | 
 }
 
 export class AnswerCard implements Component {
+	#styled = false;
 	constructor(readonly summary: AnswerPresentation, private expanded: boolean, readonly raw: string) {}
 	render(width: number): readonly string[] {
 		return new Text([
@@ -58,7 +60,8 @@ export class AnswerCard implements Component {
 			...(this.expanded ? [clean(this.raw)] : []),
 		].join("\n"), 0, 0).render(width);
 	}
-	describe(): NativeNode {
+	describe(context: DescribeContext): NativeNode {
+		if (!this.#styled) this.#styled = applyQuestionStyles(context);
 		return card({
 			role: "async-ask.answer",
 			head: [span("Answer submitted", "success strong"), span(` · ${this.summary.title}`)],
@@ -78,16 +81,18 @@ export class AnswerCard implements Component {
 
 /** A component boundary keeps receipt state live and routes its button independently of the tool card. */
 class OpenQuestions implements Component {
+	#styled = false;
 	constructor(readonly open: () => void, readonly receipt?: () => { status: string; rows: string[] }) {}
 	render(): string[] {
 		const view = this.receipt?.();
 		return [...(view ? [view.status, ...view.rows] : []), "Open questions: /questions"];
 	}
-	describe(): NativeNode {
+	describe(context: DescribeContext): NativeNode {
+		if (!this.#styled) this.#styled = applyQuestionStyles(context);
 		const button = node("button", { text: "Open questions", icon: "inbox", actions: { click: "open" } });
 		const view = this.receipt?.();
 		return view
-			? col([col([text(view.status), ...view.rows.map(row => text(row))]), button], { gap: "sm" })
+			? col([col([text(view.status), ...view.rows.map(row => text(row))]), button], { gap: "sm", role: "async-ask.receipt" })
 			: button;
 	}
 	handleNativeEvent(event: NativeUiEvent): void {

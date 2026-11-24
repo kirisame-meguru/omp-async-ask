@@ -103,9 +103,7 @@ test("each form has one question block, no redundant Ask chrome, and vertical op
 		fx.toggle();
 		const nodes = fx.harness.findAll(() => true);
 		expect(nodes.filter((n) => n.k === "card")).toHaveLength(3);
-		expect(nodes.some((n) => ["omp.ask.card", "omp.ask.card.head", "omp.ask.open"].includes(n.p?.role ?? ""))).toBe(
-			false,
-		);
+		expect(nodes.some((n) => n.p?.role === "omp.ask.card.head")).toBe(false);
 		for (const id of [fx.first.id, fx.second.id]) {
 			const lists = fx.questionNodes(id).filter((n) => n.k === "list");
 			expect(lists).toHaveLength(1);
