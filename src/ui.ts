@@ -1,4 +1,5 @@
 import type { Component, Focusable } from "@oh-my-pi/pi-tui";
+import { writeTerminalSequence } from "@oh-my-pi/pi-tui";
 import { HtmlFormDialog, type HtmlFormHost } from "@oh-my-pi/pi-tui/html-form/dialog";
 import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
 import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
@@ -69,10 +70,34 @@ function inboxFormNode(description: NativeNode): NativeNode {
 	return children ? { ...description, c: children } : description;
 }
 
+// Scope presentation to our forms; SDK inputs still own editing, focus and validation.
+const FORM_STYLES = "\x1b_tsp;s;" + JSON.stringify({
+	name: "async-ask-fields",
+	css: `
+[data-role='async-ask.form'] .sf-input,
+[data-role='async-ask.form'] .sf-editor {
+	font-family: var(--sans);
+	border-radius: var(--r-panel);
+	background: var(--card);
+	outline: none;
+	box-shadow: inset 0 0 0 1px var(--l2);
+}
+[data-role='async-ask.form'] .sf-input.focused,
+[data-role='async-ask.form'] .sf-editor.focused {
+	box-shadow: inset 0 0 0 1px var(--accent);
+}
+`,
+}) + "\x1b\\";
+
 export class InboxForm extends HtmlFormDialog {
 	#source: NativeNode | undefined;
 	#adapted: NativeNode | undefined;
+	#styled = false;
 	override describe(context: DescribeContext): NativeNode {
+		if (!this.#styled && context.feature("styles")) {
+			writeTerminalSequence(FORM_STYLES);
+			this.#styled = true;
+		}
 		const source = super.describe(context);
 		if (source !== this.#source) {
 			this.#source = source;

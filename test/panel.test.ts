@@ -132,6 +132,8 @@ test("second form submits independently and retains the first form's draft", asy
 		expect(fx.store.get(fx.first.id)?.status).toBe("pending");
 		fx.submit(fx.first.id);
 		expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ format: "pdf" });
+		fx.panel.open();
+		fx.harness.flush();
 		fx.tab("answered");
 		expect(fx.harness.findAll((n) => n.p?.role === "async-ask.question")).toHaveLength(2);
 	} finally {

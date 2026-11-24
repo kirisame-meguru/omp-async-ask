@@ -40,6 +40,7 @@ class PanelForm extends InboxForm {
 /** Session-owned disclosure: no overlay, no automatic focus, no draft disposal on collapse. */
 export class QuestionPanel implements Component {
 	#expanded = false;
+	#hadPending: boolean;
 	#tab: "pending" | "answered" = "pending";
 	#forms = new Map<string, PanelForm>();
 	#skipped = new Set<string>();
@@ -58,6 +59,7 @@ export class QuestionPanel implements Component {
 		readonly host: PanelHost,
 		readonly cwd?: string,
 	) {
+		this.#hadPending = actions.questions().some((q) => q.status === "pending");
 		this.#unsubscribe = actions.subscribe(() => this.#sync());
 	}
 
@@ -99,6 +101,13 @@ export class QuestionPanel implements Component {
 	#sync(): void {
 		if (this.#disposed || this.#submitting) return;
 		const questions = this.actions.questions();
+		const pending = questions.some((q) => q.status === "pending");
+		if (this.#hadPending && !pending) {
+			this.#releaseKeys();
+			this.#expanded = false;
+			this.#retry = undefined;
+		}
+		this.#hadPending = pending;
 		for (const [id, form] of this.#forms) {
 			if (questions.some((q) => q.id === id && q.status === "pending")) continue;
 			if (form.owns(this.host.getFocused())) this.#releaseKeys();
@@ -253,6 +262,7 @@ export class QuestionPanel implements Component {
 		this.#rows = this.host.terminal.rows;
 		const questions = this.actions.questions();
 		const pending = questions.filter((q) => q.status === "pending").length;
+		if (!pending && !this.#expanded) return (this.#native = col([], { hidden: true }));
 		const answered = questions.filter((q) => q.status !== "pending").length;
 		const failed = questions.filter((q) => q.delivery === "failed").length;
 		const label = `Questions · ${pending} pending${failed ? ` · ${failed} send failed` : ""}${this.actions.errors().length ? " · history error" : ""}`;
@@ -344,6 +354,7 @@ export class QuestionPanel implements Component {
 	}
 
 	render(): readonly string[] {
+		if (!this.#expanded && !this.#hadPending) return [];
 		return [
 			`Questions · ${this.actions.questions().filter((q) => q.status === "pending").length} pending · /questions`,
 			"",
