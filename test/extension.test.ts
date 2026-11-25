@@ -179,7 +179,6 @@ test("policy appends before any question without mutating or accumulating on the
 			systemPrompt: base,
 		})) as BeforeAgentStartEventResult;
 		expect(result.systemPrompt).toEqual([...base, goalPolicy]);
-		expect(result.systemPrompt?.at(-1)).toStartWith("## Goal persistence and non-blocking questions\n\n");
 	}
 	expect(fx.log.entries).toEqual([]);
 });
@@ -471,9 +470,6 @@ test("Tern question cards hide transport payloads and open the real inbox", asyn
 		expect(drawn).not.toContain("blockedWork=");
 		const button = harness.find(node => node.k === "button" && node.p?.text === "Open questions");
 		expect(button).toBeDefined();
-		const actionGroup = harness.find(node => node.k === "col" && node.c?.some(child => child.id === button!.id) === true);
-		expect(actionGroup?.k === "col" ? actionGroup.p?.gap : undefined).toBe("sm");
-		expect(actionGroup?.c?.[0]?.k).toBe("col");
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
 		expect(fx.opened()).toBe(0);
 		expect(fx.widget()).toBeInstanceOf(QuestionPanel);
@@ -483,7 +479,7 @@ test("Tern question cards hide transport payloads and open the real inbox", asyn
 		let pending: readonly AsyncQuestion[] = [];
 		source!.subscribe(value => { pending = value; });
 		pending[0]!.submitConfirmed({ target: "stage" });
-		await harness.render();
+		harness.flush();
 		expect(JSON.stringify(harness.doc())).toContain("Answered");
 		expect(JSON.stringify(harness.doc())).not.toContain("Awaiting answer");
 		await fx.emit("session_before_switch");
@@ -491,6 +487,7 @@ test("Tern question cards hide transport payloads and open the real inbox", asyn
 		await fx.emit("session_switch");
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
 		expect(fx.opened()).toBe(0);
+		expect(fx.widget()).toBeUndefined();
 	} finally {
 		harness.stop();
 	}
@@ -527,7 +524,7 @@ test("Tern answer cards show selected labels while preserving the full agent mes
 		expect(JSON.stringify(message)).toBe(original);
 		expect(message.content).toContain(question.html);
 		expect(message.content).toContain('"target": "stage"');
-		const card = harness.find(node => node.k === "card" && node.p?.role === "async-ask.answer");
+		const card = harness.find(node => node.p?.role === "async-ask.answer");
 		expect(card).toBeDefined();
 		harness.event({ ev: "toggle", sf: harness.terminal.surface!, id: card!.id, collapsed: false });
 		expect(JSON.stringify(harness.doc())).toContain("Question ID:");

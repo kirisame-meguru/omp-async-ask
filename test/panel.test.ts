@@ -50,7 +50,7 @@ async function fixture(
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: node.id, act, mods: [] });
 	const toggle = () => {
 		const card = harness.find((n) => n.p?.role === "async-ask.panel")!;
-		if (card.k !== "card") throw new Error("Expected question card");
+		if (!card.p || !("collapsed" in card.p)) throw new Error("Expected a disclosure panel");
 		harness.event({ ev: "toggle", sf: harness.terminal.surface!, id: card.id, collapsed: !card.p?.collapsed });
 	};
 	const select = (id: string, item: string) => {
@@ -102,7 +102,7 @@ test("each form has one question block, no redundant Ask chrome, and vertical op
 	try {
 		fx.toggle();
 		const nodes = fx.harness.findAll(() => true);
-		expect(nodes.filter((n) => n.k === "card")).toHaveLength(3);
+		expect(nodes.filter((n) => n.p?.role === "async-ask.question")).toHaveLength(2);
 		expect(nodes.some((n) => n.p?.role === "omp.ask.card.head")).toBe(false);
 		for (const id of [fx.first.id, fx.second.id]) {
 			const lists = fx.questionNodes(id).filter((n) => n.k === "list");

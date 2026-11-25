@@ -1,7 +1,9 @@
 import { beforeAll, expect, test } from "bun:test";
+import { col } from "@oh-my-pi/pi-tui/native/describe";
 import { initTheme } from "@oh-my-pi/pi-tui/theme";
 import { AnswerCard, questionRenderers, savedAnswerPresentation, summarizeAnswer } from "../src/presentation";
 import type { Question } from "../src/state";
+import { TspHarness } from "./tsp-harness";
 
 beforeAll(async () => { await initTheme(false); });
 
@@ -37,7 +39,7 @@ test("malformed historical presentation metadata defers instead of hiding the me
 	expect(savedAnswerPresentation({ presentation: { title: "Question", rows: ["Answer"] } })).toEqual({ title: "Question", rows: ["Answer"] });
 });
 
-test("withdrawals, lists and errors show their actual state rather than a pending success", () => {
+test("withdrawals, lists and errors show their actual state rather than a pending success", async () => {
 	const renderers = questionRenderers(() => {});
 	const options = { expanded: false, isPartial: false };
 	for (const [result, args, expected] of [
@@ -46,11 +48,21 @@ test("withdrawals, lists and errors show their actual state rather than a pendin
 		[{ content: [{ type: "text", text: "Invalid form" }], isError: true }, { op: "create" }, ["Invalid form"]],
 	] as const) {
 		const mutable = { ...result, content: [...result.content] };
-		const native = JSON.stringify(renderers.describeResult(mutable, options, args));
-		const ansi = renderers.renderResult(mutable, options, undefined, args).render(100).join("\n");
-		for (const text of expected) { expect(native).toContain(text); expect(ansi).toContain(text); }
-		expect(native).not.toContain("Awaiting answer");
-		if ("isError" in result) expect(native).not.toContain("Open questions");
+		const component = renderers.renderResult(mutable, options, undefined, args);
+		const harness = await TspHarness.start(tui => tui.addChild({
+			render: width => component.render(width),
+			describe: () => col(renderers.describeResult(mutable, options, args).body ?? []),
+		}));
+		try {
+			const native = JSON.stringify(harness.doc());
+			const ansi = component.render(100).join("\n");
+			for (const text of expected) { expect(native).toContain(text); expect(ansi).toContain(text); }
+			expect(native).not.toContain("Awaiting answer");
+			if ("isError" in result) expect(native).not.toContain("Open questions");
+			expect(harness.errors).toEqual([]);
+		} finally {
+			harness.stop();
+		}
 	}
 	expect(JSON.stringify(renderers.describeCall({}))).not.toContain("undefined");
 });
