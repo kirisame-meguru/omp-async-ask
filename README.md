@@ -53,7 +53,7 @@ A question waiting for input is **not** permission to proceed with its dependent
 
 ## Get started
 
-**Requirements:** OMP **19.x**, Bun **1.4.4+**, and a top-level interactive OMP session. Tern is optional: native rendering gets rich controls; ordinary terminals get a keyboard-driven fallback. Headless sessions and subagents are not supported.
+**Requirements:** OMP **19.1.x**, Bun **1.4.4+**, and a top-level interactive OMP session. OMP 19.2 is not supported: it removed native UI APIs used by this release. Tern is optional: native rendering gets rich controls; ordinary terminals get a keyboard-driven fallback. Headless sessions and subagents are not supported.
 
 ### Install from source
 
