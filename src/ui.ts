@@ -26,7 +26,8 @@ function clean(value: string): string {
 function status(question: Question): string {
 	if (question.status === "withdrawn") return "Withdrawn";
 	if (question.status === "pending") return "Pending";
-	return question.delivery === "failed" ? "Answered · send failed" : "Answered";
+	return question.delivery === "failed" ? "Answered · send failed"
+		: question.delivery === "unconfirmed" ? "Answered · delivery unconfirmed" : "Answered";
 }
 
 /** Adapt native chrome only; retain the SDK's fields, validation and event ownership. */
@@ -66,16 +67,33 @@ function inboxFormNode(description: NativeNode): NativeNode {
 	return children ? { ...description, c: children } : description;
 }
 
-// Keep the SDK's Ask roles: they supply the native field metrics and typography.
-// Only redundant frames are removed; prose outside the form uses the same UI face.
+// Use OMP's native heads and the same theme tokens as its output wells.
+// Text-only tools need a body well too; Tern otherwise frames only code/ANSI children.
 const FORM_STYLES = "\x1b_tsp;s;" + JSON.stringify({
 	name: "async-ask-fields",
 	css: `
 [data-role^='async-ask.'],
 [data-role^='async-ask.'] .sf-text,
 [data-role^='async-ask.'] .sf-card-head,
+[data-role^='async-ask.'] .sf-tool-target.text,
 [data-role^='async-ask.'] .sf-elapsed {
 	font-family: var(--sans);
+}
+.sf-tool[data-role='omp.tool.ask_async'] > .sf-tool-body,
+.sf-tool[data-role^='async-ask.'] > .sf-tool-body {
+	border: 1px solid var(--l2);
+	border-radius: var(--r-card);
+	background: var(--code-bg);
+	padding: 12px 14px;
+	margin-top: 8px;
+}
+[data-role='async-ask.receipt'] > .sf-section + [data-role='async-ask.receipt.footer'] {
+	border-top: 1px solid var(--l2);
+	padding-top: 8px;
+}
+[data-role='async-ask.body'] > [data-role='async-ask.question'] + [data-role='async-ask.question'] {
+	border-top: 1px solid var(--l2);
+	padding-top: 12px;
 }
 [data-role='async-ask.form'] [data-role='omp.ask.card'],
 [data-role='async-ask.form'] [data-role='omp.ask.card.body'],
@@ -93,6 +111,52 @@ export function applyQuestionStyles(context: DescribeContext): boolean {
 	if (!context.feature("styles")) return false;
 	writeTerminalSequence(FORM_STYLES);
 	return true;
+}
+
+/** Let Tern draw the same data head and body frame it uses for OMP tools. */
+export function questionBlock(
+	context: DescribeContext,
+	props: {
+		role: string;
+		title: string;
+		target?: string;
+		note?: string;
+		status: "pending" | "done" | "error" | "cancelled";
+		collapsed?: boolean;
+		preview?: { lines: number } | "children";
+	},
+	body: readonly NativeChild[],
+	key?: string,
+): NativeNode {
+	const collapsible = props.collapsed !== undefined;
+	if (context.supports("tool")) {
+		return node("tool", {
+			...props,
+			name: "ask",
+			targetKind: "text",
+			frame: "card",
+			collapsible,
+		}, body, key);
+	}
+	return node("card", {
+		role: props.role,
+		head: [
+			span(props.title, "strong"),
+			...(props.target ? [span(` · ${props.target}`)] : []),
+			...(props.note ? [span(` · ${props.note}`, "muted")] : []),
+		],
+		status: props.status,
+		collapsible,
+		collapsed: props.collapsed,
+		preview: props.preview === "children" ? { lines: 8 } : props.preview,
+	}, body, key);
+}
+
+export function questionStatus(label: string, tone: "muted" | "success" | "warning" | "error", icon?: string): NativeNode {
+	return row([
+		node("icon", { name: icon ?? (tone === "success" ? "check" : tone === "error" ? "x" : tone === "warning" ? "warn" : "clock"), tone }),
+		text([span(label, tone)], { wrap: "word" }),
+	], { gap: "sm", align: "baseline", role: "async-ask.status" });
 }
 
 export class InboxForm extends HtmlFormDialog {
@@ -139,6 +203,7 @@ export class QuestionIndicator implements Component {
 		const failed = questions.some(question => question.delivery === "failed");
 		const errors = this.actions.errors().length > 0;
 		return (this.#native = node("button", {
+			role: "omp.btn",
 			text: this.#label(),
 			icon: errors || failed ? "warn" : "inbox",
 			variant: pending ? "primary" : "default",
@@ -184,6 +249,7 @@ export class QuestionInbox implements Component, Focusable {
 	#confirm: "discard" | "retry" | undefined;
 	#message = "";
 	#native: NativeNode | undefined;
+	#styled = false;
 	#unsubscribe: () => void;
 	#disposed = false;
 	constructor(
@@ -484,11 +550,10 @@ export class QuestionInbox implements Component, Focusable {
 		lines.push(...this.actions.errors());
 		return lines.map(line => truncateToWidth(clean(line), width));
 	}
-	#card(question: Question): NativeNode {
+	#card(question: Question, context: DescribeContext): NativeNode {
 		const expanded = question.id === this.#expanded;
 		const skipped = this.#skipped.has(question.id);
 		const answered = question.status === "answered";
-		const tone = answered ? "success" : skipped ? "warning" : expanded ? "accent" : "muted";
 		const body: NativeChild[] = [];
 		if (expanded) {
 			body.push(
@@ -523,27 +588,17 @@ export class QuestionInbox implements Component, Focusable {
 				);
 			}
 		}
-		return node(
-			"card",
-			{
-				head: [
-					span(clean(question.title), `strong ${answered ? "success" : skipped ? "warning" : ""}`),
-					span(
-						`  ·  ${skipped ? "Skipped · still pending" : status(question)}`,
-						answered ? "success" : skipped ? "warning" : "muted",
-					),
-				],
-				role: answered ? "async-ask.check" : skipped ? "async-ask.clock" : "async-ask.help",
-				tone,
-				status: answered ? "done" : skipped ? "pending" : undefined,
-				collapsible: true,
-				collapsed: !expanded,
-			},
-			body,
-			question.id,
-		);
+		return questionBlock(context, {
+			role: "async-ask.question",
+			title: "Question",
+			target: clean(question.title),
+			note: skipped ? "Skipped · still pending" : status(question),
+			status: question.delivery === "failed" ? "error" : answered ? "done" : question.status === "withdrawn" ? "cancelled" : "pending",
+			collapsed: !expanded,
+		}, body, question.id);
 	}
-	describe(_context: DescribeContext): NativeNode {
+	describe(context: DescribeContext): NativeNode {
+		if (!this.#styled) this.#styled = applyQuestionStyles(context);
 		if (this.#native) return this.#native;
 		const questions = this.actions.questions();
 		const pending = questions.filter(question => question.status === "pending").length;
@@ -562,7 +617,7 @@ export class QuestionInbox implements Component, Focusable {
 						},
 						"inbox-tabs",
 					),
-					node("button", { text: "Close", icon: "x", actions: { click: "close" } }),
+					node("button", { role: "omp.btn", text: "Close", icon: "x", variant: "quiet", actions: { click: "close" } }),
 				],
 				{ justify: "between", gap: "md", wrap: true },
 			),
@@ -570,15 +625,17 @@ export class QuestionInbox implements Component, Focusable {
 		];
 		if (this.#confirm) {
 			body.push(
-				node("card", { head: this.#confirmationText(), role: "async-ask.warn", tone: "warning" }, [
+				questionBlock(context, { title: this.#confirm === "discard" ? "Discard drafts?" : "Review answer delivery", role: "async-ask.warn", status: "pending" }, [
+					questionStatus(this.#confirmationText(), "warning"),
 					row(
 						[
 							node("button", {
+								role: "omp.btn",
 								text: this.#confirm === "discard" ? "Discard drafts and close" : "Retry answer",
 								variant: "danger",
 								actions: { click: "confirm" },
 							}),
-							node("button", { text: "Keep current state", actions: { click: "keep" } }),
+							node("button", { role: "omp.btn", text: "Keep current state", actions: { click: "keep" } }),
 						],
 						{ gap: "sm", wrap: true },
 					),
@@ -587,7 +644,7 @@ export class QuestionInbox implements Component, Focusable {
 		} else if (visible.length) {
 			body.push(
 				col(
-					visible.map(q => this.#card(q)),
+					visible.map(q => this.#card(q, context)),
 					{ gap: "sm" },
 				),
 			);
@@ -609,9 +666,9 @@ export class QuestionInbox implements Component, Focusable {
 				),
 			);
 		}
-		if (this.#message) body.push(text(clean(this.#message), { tone: "muted", wrap: "word" }));
-		body.push(...this.actions.errors().map(error => text(clean(error), { tone: "error", wrap: "word" })));
-		return (this.#native = col(body, { gap: "md" }));
+		if (this.#message) body.push(questionStatus(clean(this.#message), "muted"));
+		body.push(...this.actions.errors().map(error => questionStatus(clean(error), "error")));
+		return (this.#native = col(body, { gap: "md", role: "async-ask.inbox.body" }));
 	}
 	#refresh(): void {
 		this.invalidate();

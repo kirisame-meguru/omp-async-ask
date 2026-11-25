@@ -5,7 +5,7 @@ import { col, elapsed, node, row, text } from "@oh-my-pi/pi-tui/native/describe"
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Question } from "./state";
-import { applyQuestionStyles, InboxForm, type InboxActions } from "./ui";
+import { applyQuestionStyles, InboxForm, questionBlock, questionStatus, type InboxActions } from "./ui";
 
 export interface PanelHost extends HtmlFormHost, Pick<TUI, "getFocused" | "setFocus"> {}
 
@@ -218,13 +218,24 @@ export class QuestionPanel implements Component {
 
 	#question(question: Question): NativeNode {
 		const body: NativeChild[] = [
-			row([text("Asked", { tone: "muted" }), elapsed(Date.now() - question.createdAt)], { gap: "sm" }),
+			row([
+				questionStatus(
+					this.#skipped.has(question.id) ? "Skipped · still pending"
+						: question.delivery === "failed" ? "Answered · send failed"
+						: question.delivery === "unconfirmed" ? "Answered · delivery unconfirmed"
+						: question.status === "pending" ? "Awaiting answer"
+						: question.status === "withdrawn" ? "Withdrawn" : "Answered",
+					question.delivery === "failed" || question.delivery === "unconfirmed" ? "warning"
+						: question.status === "answered" ? "success" : "muted",
+				),
+				row([text("Asked", { tone: "muted" }), elapsed(Date.now() - question.createdAt)], { gap: "sm" }),
+			], { gap: "sm", justify: "between", wrap: true }),
+			text(sanitizeText(question.blockedWork), { tone: "muted", wrap: "word" }),
 		];
 		if (question.status === "pending") {
 			const form = this.#forms.get(question.id);
 			if (form) body.push(form);
 		} else {
-			body.push(text(sanitizeText(question.title), { wrap: "word" }));
 			if (question.reason) body.push(text(sanitizeText(question.reason), { tone: "muted", wrap: "word" }));
 			if (question.answer) {
 				body.push(
@@ -251,11 +262,11 @@ export class QuestionPanel implements Component {
 					),
 				);
 				body.push(
-					node("button", { text: "Review resend…", icon: "repeat", actions: { click: `retry:${question.id}` } }),
+					node("button", { role: "omp.btn", text: "Review resend…", icon: "repeat", actions: { click: `retry:${question.id}` } }),
 				);
 			}
 		}
-		return node("card", { role: "async-ask.question" }, body, question.id);
+		return node("section", { role: "async-ask.question", head: sanitizeText(question.title) }, body, question.id);
 	}
 
 	describe(context: DescribeContext): NativeNode {
@@ -267,11 +278,11 @@ export class QuestionPanel implements Component {
 		if (!pending && !this.#expanded) return (this.#native = col([], { hidden: true }));
 		const answered = questions.filter((q) => q.status !== "pending").length;
 		const failed = questions.filter((q) => q.delivery === "failed").length;
-		const label = `Questions · ${pending} pending${failed ? ` · ${failed} send failed` : ""}${this.actions.errors().length ? " · history error" : ""}`;
+		const label = `${pending} pending${failed ? ` · ${failed} send failed` : ""}${this.actions.errors().length ? " · history error" : ""}`;
 		const children: NativeChild[] = [];
 		const cardBody: NativeChild[] = [];
 		if (this.#expanded) {
-			children.push(
+			cardBody.push(
 				node(
 					"tabs",
 					{
@@ -289,11 +300,11 @@ export class QuestionPanel implements Component {
 			const body: NativeChild[] = [];
 			if (this.#retry) {
 				body.push(
-					text("Delivery is unconfirmed. Retrying may deliver the answer twice.", { tone: "warning", wrap: "word" }),
+					questionStatus("Delivery is unconfirmed. Retrying may deliver the answer twice.", "warning"),
 					row(
 						[
-							node("button", { text: "Retry answer", variant: "danger", actions: { click: "confirm" } }),
-							node("button", { text: "Keep current state", actions: { click: "keep" } }),
+							node("button", { role: "omp.btn", text: "Retry answer", variant: "danger", actions: { click: "confirm" } }),
+							node("button", { role: "omp.btn", text: "Keep current state", actions: { click: "keep" } }),
 						],
 						{ gap: "sm", wrap: true },
 					),
@@ -308,8 +319,8 @@ export class QuestionPanel implements Component {
 						text(this.#tab === "pending" ? "No pending questions." : "No answered questions yet.", { tone: "muted" }),
 					);
 			}
-			if (this.#message) body.push(text(sanitizeText(this.#message), { tone: "warning", wrap: "word" }));
-			body.push(...this.actions.errors().map((error) => text(sanitizeText(error), { tone: "error", wrap: "word" })));
+			if (this.#message) body.push(questionStatus(sanitizeText(this.#message), "warning"));
+			body.push(...this.actions.errors().map((error) => questionStatus(sanitizeText(error), "error")));
 			const scroller = node(
 				"col",
 				{
@@ -323,12 +334,12 @@ export class QuestionPanel implements Component {
 			cardBody.push({ ...scroller, scroll: { by: "start", n: this.#scrollVersion } });
 		}
 		children.push(
-			node(
-				"card",
+			questionBlock(context,
 				{
 					role: "async-ask.panel",
-					head: label,
-					collapsible: true,
+					title: "Questions",
+					target: label,
+					status: failed || this.actions.errors().length ? "error" : pending ? "pending" : "done",
 					collapsed: !this.#expanded,
 					preview: { lines: 0 },
 				},
