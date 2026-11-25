@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CustomMessagePayload, SessionEntry } from "@oh-my-pi/pi-coding-agent";
 import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
-import { prompt } from "@oh-my-pi/pi-utils";
+import { logger, prompt } from "@oh-my-pi/pi-utils";
 import answerTemplate from "./prompts/answer.md" with { type: "text" };
 import { summarizeAnswer } from "./presentation";
 import { ANSWER_TYPE, type AnswerNote, type DeliveryState, type Question, type QuestionStore } from "./state";
@@ -11,7 +11,7 @@ export interface DeliveryPort {
 	isIdle(): boolean;
 	hasPendingMessages?(): boolean;
 	entries(): readonly SessionEntry[];
-	send(message: CustomMessagePayload, options: { deliverAs: "aside" }): void;
+	send(message: CustomMessagePayload, options: { deliverAs: "aside" } | { triggerTurn: true }): void;
 }
 
 export interface SubmissionReceipt {
@@ -70,6 +70,15 @@ export class AnswerDelivery {
 		try {
 			// A store observer can close the UI or replace its owner; recheck just before dispatch.
 			this.#assertCurrent();
+			// Submission is explicit user input, not a background notification. Idle asides
+			// can be recorded without a turn after an interrupt; request that turn explicitly.
+			// While busy, keep non-interrupting delivery at the next agent step boundary.
+			const idle = this.port.isIdle();
+			const options = idle ? { triggerTurn: true as const } : { deliverAs: "aside" as const };
+			logger.debug("Async Ask answer dispatch", {
+				sessionId: this.store.sessionId, answerId: answer.id,
+				idle, pendingMessages: this.port.hasPendingMessages?.(), ...options,
+			});
 			this.port.send(
 				{
 					customType: ANSWER_TYPE,
@@ -89,8 +98,11 @@ export class AnswerDelivery {
 						notes: JSON.stringify(answer.notes, null, 2),
 					}),
 				},
-				{ deliverAs: "aside" },
+				options,
 			);
+			logger.debug("Async Ask answer dispatch returned", {
+				answerId: answer.id, delivery: this.store.get(question.id)?.delivery,
+			});
 		} catch (error) {
 			if (this.store.get(question.id)?.delivery !== "recorded") this.store.setDelivery(question.id, "failed");
 			throw error;

@@ -15,7 +15,7 @@ function setup() {
 		isIdle: () => idle,
 		entries: () => log.entries,
 		send: (message, options) => {
-			expect(options.deliverAs).toBe("aside");
+			expect(options).toEqual(idle ? { triggerTurn: true } : { deliverAs: "aside" });
 			sent.push(message);
 		},
 	};
@@ -35,6 +35,26 @@ function setup() {
 		},
 	};
 }
+
+test("an idle submission explicitly starts a turn instead of relying on background-aside wake-up", () => {
+	const { store, delivery, port, sent, settle } = setup();
+	const question = store.create(input, "one");
+	settle();
+	const options: unknown[] = [];
+	const send = port.send;
+	port.send = (message, dispatch) => {
+		options.push(dispatch);
+		send(message, dispatch);
+	};
+	delivery.submit(question.id, { target: "staging" }, []);
+	expect(options).toEqual([{ triggerTurn: true }]);
+	expect(sent).toHaveLength(1);
+	expect(sent[0]).toMatchObject({ attribution: "user" });
+	expect(store.get(question.id)?.delivery).toBe("queued");
+	// Observing idle again is not another user action and must not dispatch twice.
+	settle();
+	expect(sent).toHaveLength(1);
+});
 
 test("submitting an answer does not await an executing tool or generate duplicate dispatch", async () => {
 	const activeTool = Promise.withResolvers<void>();

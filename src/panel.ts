@@ -3,7 +3,7 @@ import type { HtmlFormDialogOptions, HtmlFormHost } from "@oh-my-pi/pi-tui/html-
 import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
 import { col, elapsed, node, row, text } from "@oh-my-pi/pi-tui/native/describe";
 import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import { sanitizeText } from "@oh-my-pi/pi-utils";
+import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Question } from "./state";
 import { applyQuestionStyles, InboxForm, questionBlock, questionStatus, type InboxActions } from "./ui";
 
@@ -175,6 +175,10 @@ export class QuestionPanel implements Component {
 			}
 		}
 		this.#refresh();
+		logger.debug("Async Ask panel synchronized", {
+			pending: questions.filter(question => question.status === "pending").length,
+			expanded: this.#expanded,
+		});
 	}
 
 	handleNativeEvent(event: NativeUiEvent): void {
@@ -386,6 +390,7 @@ export class QuestionPanel implements Component {
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
+		logger.debug("Async Ask panel disposed");
 		this.#unsubscribe();
 		this.#releaseKeys();
 		for (const form of this.#forms.values()) form.dispose();

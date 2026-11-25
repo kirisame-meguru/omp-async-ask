@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
-import { isRecord, prompt, truncate } from "@oh-my-pi/pi-utils";
+import { isRecord, logger, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
 import { AVAILABLE, createQuestionSource, serveQuestionSources, type OwnedQuestionSource } from "./bridge";
 import { AnswerDelivery } from "./delivery";
@@ -43,6 +43,11 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const previous = connection;
 		connection = undefined;
 		if (!previous) return;
+		logger.debug("Async Ask owner invalidated", {
+			sessionId: previous.store.sessionId,
+			currentSessionId: previous.ctx.sessionManager.getSessionId(),
+			hasPanel: Boolean(previous.panel),
+		});
 		previous.unsubscribeWidget?.();
 		previous.source?.close();
 		previous.delivery.dispose();
@@ -76,6 +81,9 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 			pi.appendEntry(EVENT_TYPE, event);
 		});
 		store.restore(ctx.sessionManager.getBranch());
+		logger.debug("Async Ask owner restored", {
+			sessionId, pending: store.list().filter(question => question.status === "pending").length,
+		});
 		const delivery = new AnswerDelivery(store, {
 			sessionId: () => ctx.sessionManager.getSessionId(),
 			isIdle: () => ctx.isIdle(),
