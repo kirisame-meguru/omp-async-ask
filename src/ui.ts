@@ -91,6 +91,14 @@ const FORM_STYLES = "\x1b_tsp;s;" + JSON.stringify({
 	border-top: 1px solid var(--l2);
 	padding-top: 8px;
 }
+[data-role='async-ask.body'] {
+	overflow-y: auto;
+	min-height: 0;
+	overscroll-behavior-y: contain;
+}
+[data-role='async-ask.body'] > * {
+	flex-shrink: 0;
+}
 [data-role='async-ask.body'] > [data-role='async-ask.question'] + [data-role='async-ask.question'] {
 	border-top: 1px solid var(--l2);
 	padding-top: 12px;
