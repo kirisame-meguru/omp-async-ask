@@ -1,11 +1,7 @@
-import { beforeAll, expect, test } from "bun:test";
-import { col } from "@oh-my-pi/pi-tui/native/describe";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
+import { expect, test } from "bun:test";
 import { AnswerCard, questionRenderers, savedAnswerPresentation, summarizeAnswer } from "../src/presentation";
 import type { Question } from "../src/state";
-import { TspHarness } from "./tsp-harness";
-
-beforeAll(async () => { await initTheme(false); });
+import { UiHarness } from "./ui-harness";
 
 const question: Question = {
 	id: "question", sessionId: "session", toolCallId: "call", createdAt: 1,
@@ -22,9 +18,12 @@ test("answer summaries map submitted choices, retain Other and notes, and omit h
 		"Features: Gamma, Custom choice", "Region: East region", "Comment: literal <tag>",
 		"Features — Gamma: Please enable it",
 	]);
-	const ansi = new AnswerCard(summary, false, "Technical payload").render(100).join("\n");
-	expect(ansi).toContain("Gamma, Custom choice");
-	expect(ansi).not.toContain("Technical payload");
+	const harness = new UiHarness(() => AnswerCard(summary, false, "Technical payload"));
+	try {
+		expect(harness.snapshot()).toContain("Gamma, Custom choice");
+		expect(harness.snapshot()).not.toContain("Technical payload");
+		expect(harness.terminal.screen().join("\n")).toContain("Gamma");
+	} finally { harness.dispose(); }
 	expect(JSON.stringify(summary)).not.toContain("hidden-value");
 });
 
@@ -45,24 +44,19 @@ test("withdrawals, lists and errors show their actual state rather than a pendin
 	for (const [result, args, expected] of [
 		[{ content: [], details: { title: "Preferences", status: "withdrawn", reason: "No longer needed" } }, { op: "withdraw" }, ["Withdrawn", "No longer needed"]],
 		[{ content: [], details: { questions: [{ title: "Preferences", status: "answered" }], errors: ["History unavailable"] } }, { op: "list" }, ["answered", "History unavailable"]],
-		[{ content: [{ type: "text", text: "Invalid form" }], isError: true }, { op: "create" }, ["Invalid form"]],
+		[{ content: [{ type: "text", text: "Invalid form" }], details: {}, isError: true }, { op: "create" }, ["Invalid form"]],
 	] as const) {
 		const mutable = { ...result, content: [...result.content] };
-		const component = renderers.renderResult(mutable, options, undefined, args);
-		const harness = await TspHarness.start(tui => tui.addChild({
-			render: width => component.render(width),
-			describe: () => col(renderers.describeResult(mutable, options, args).body ?? []),
-		}));
+		const harness = new UiHarness(() => renderers.renderResult(mutable, options, undefined, args));
 		try {
-			const native = JSON.stringify(harness.doc());
-			const ansi = component.render(100).join("\n");
+			const native = harness.snapshot();
+			const ansi = harness.terminal.screen().join("\n");
 			for (const text of expected) { expect(native).toContain(text); expect(ansi).toContain(text); }
 			expect(native).not.toContain("Awaiting answer");
 			if ("isError" in result) expect(native).not.toContain("Open questions");
-			expect(harness.errors).toEqual([]);
 		} finally {
-			harness.stop();
+			harness.dispose();
 		}
 	}
-	expect(JSON.stringify(renderers.describeCall({}))).not.toContain("undefined");
+	expect(renderers.renderCall({}).props()).toMatchObject({ text: "Ask asynchronously · Question" });
 });

@@ -1,4 +1,5 @@
-import { isNativeRendering, onNativeRenderingChange, writeTerminalSequence } from "@oh-my-pi/pi-tui";
+import { createRoot, effect, nativeRendering } from "@oh-my-pi/pi-tui";
+import { writeTerminalSequence } from "@oh-my-pi/pi-tui/driver/session";
 import type { QuestionStore } from "./state";
 
 // OSC 7501 child records coexist with the host's working/done/approval status.
@@ -14,14 +15,17 @@ export class QuestionAttention {
 
 	constructor(readonly store: QuestionStore) {
 		this.#unsubscribeStore = store.subscribe(() => this.#sync());
-		this.#unsubscribeNative = onNativeRenderingChange(() => this.#sync());
+		this.#unsubscribeNative = createRoot(dispose => {
+			effect(() => this.#sync());
+			return dispose;
+		});
 		this.#sync();
 	}
 
 	#sync(): void {
 		// Classic transcript redraws emit OSC 133 prompt marks, which drop blocked
 		// records. Native surfaces do not: no polling or competing status writers.
-		const pending = isNativeRendering() && this.store.list().some(question => question.status === "pending");
+		const pending = nativeRendering() && this.store.list().some(question => question.status === "pending");
 		if (pending === this.#published) return;
 		this.#published = pending;
 		writeTerminalSequence(pending ? PENDING : CLEAR);

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
+import type { HtmlFormData } from "@oh-my-pi/pi-coding-agent/tools/html-form/data";
 import { EVENT_TYPE, MAX_PENDING, QuestionStore } from "../src/state";
 import { input, journal, recorded, recordedEntry } from "./helpers";
 

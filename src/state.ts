@@ -1,7 +1,7 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { SessionEntry } from "@oh-my-pi/pi-coding-agent";
-import { fieldError, type HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
-import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
+import { fieldError, type HtmlFormData } from "@oh-my-pi/pi-coding-agent/tools/html-form/data";
+import { parseHtmlForm } from "@oh-my-pi/pi-coding-agent/tools/html-form/parse";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 
 export const EVENT_TYPE = "omp-async-ask:event";

@@ -1,398 +1,206 @@
-import type { Component, TUI } from "@oh-my-pi/pi-tui";
-import type { HtmlFormDialogOptions, HtmlFormHost } from "@oh-my-pi/pi-tui/html-form/dialog";
-import { parseHtmlForm } from "@oh-my-pi/pi-tui/html-form/parse";
-import { col, elapsed, node, row, text } from "@oh-my-pi/pi-tui/native/describe";
-import type { DescribeContext, NativeChild, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import { logger, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
+import { onCleanup, signal, UiNode, type JSXNode, type KeyEvent } from "@oh-my-pi/pi-tui";
 import type { Question } from "./state";
-import { applyQuestionStyles, InboxForm, questionBlock, questionStatus, type InboxActions } from "./ui";
+import { answerNodes, clean, InboxForm, questionBlock, questionState, questionStatus, type InboxActions } from "./ui";
 
-export interface PanelHost extends HtmlFormHost, Pick<TUI, "getFocused" | "setFocus"> {}
-
-/** Detached drafts keep values, not permission to interact with hidden or withdrawn forms. */
-class PanelForm extends InboxForm {
-	#description: NativeNode | undefined;
-	constructor(
-		html: string,
-		options: HtmlFormDialogOptions,
-		readonly interactive: () => boolean,
-	) {
-		super(parseHtmlForm(html), options);
-	}
-	override describe(context: DescribeContext): NativeNode {
-		return (this.#description = super.describe(context));
-	}
-	owns(component: Component | null): boolean {
-		if (component === this) return true;
-		if (!component || !this.#description) return false;
-		const contains = (child: NativeChild): boolean =>
-			child === component || ("k" in child && (child.c?.some(contains) ?? false));
-		return contains(this.#description);
-	}
-	override handleNativeEvent(event: NativeUiEvent): void {
-		if (this.interactive()) super.handleNativeEvent(event);
-	}
-	override handleInput(data: string): void {
-		if (this.interactive()) super.handleInput(data);
-	}
-}
-
-/** Session-owned disclosure: no overlay, no automatic focus, no draft disposal on collapse. */
-export class QuestionPanel implements Component {
+/** Session-owned disclosure. Opening never takes keys from the composer. */
+export class QuestionPanel {
 	#expanded = false;
 	#hadPending: boolean;
 	#tab: "pending" | "answered" = "pending";
-	#forms = new Map<string, PanelForm>();
+	#forms = new Map<string, InboxForm>();
 	#skipped = new Set<string>();
-	#returnFocus: Component | null = null;
+	#claimed: string | undefined;
 	#retry: string | undefined;
 	#message = "";
 	#disposed = false;
 	#submitting = false;
-	#unsubscribe: () => void;
-	#rows = 0;
 	#scrollVersion = 0;
-	#native: NativeNode | undefined;
-	#styled = false;
-
+	readonly #revision = signal(0);
+	readonly #unsubscribe: () => void;
+	readonly #unsubscribeKeys: (() => void) | undefined;
 	constructor(
 		readonly actions: InboxActions,
-		readonly host: PanelHost,
-		readonly cwd?: string,
+		readonly host: ExtensionUiHost,
+		readonly cwd = ".",
+		addKeyHandler?: (handler: (key: KeyEvent) => boolean) => () => void,
 	) {
-		this.#hadPending = actions.questions().some((q) => q.status === "pending");
+		this.#hadPending = actions.questions().some(q => q.status === "pending");
 		this.#unsubscribe = actions.subscribe(() => this.#sync());
+		this.#unsubscribeKeys = addKeyHandler?.(key => this.key(key));
 	}
-
 	open(): void {
 		if (this.#disposed || this.#expanded) return;
 		this.#expanded = true;
 		this.#skipped.clear();
-		this.#returnFocus = this.host.getFocused();
 		this.#scrollVersion++;
-		this.#tab = this.actions.questions().some((q) => q.status === "pending") ? "pending" : "answered";
+		this.#tab = this.actions.questions().some(q => q.status === "pending") ? "pending" : "answered";
 		this.#sync();
 	}
-
-	#collapse(): void {
-		this.#releaseKeys();
+	collapse(): void {
+		this.release();
 		this.#expanded = false;
 		this.#retry = undefined;
-		this.#refresh();
+		this.#revision.update(n => n + 1);
 	}
-
-	#claimKeys(form: PanelForm): void {
-		const current = this.host.getFocused();
-		if (current === form) return;
-		if (!this.#ownsFocus(current)) this.#returnFocus = current;
-		this.host.setFocus(form);
+	claim(id: string): void {
+		const form = this.#forms.get(id);
+		if (!form?.live) return;
+		this.release();
+		this.#claimed = id;
+		form.model.focused.set(true);
 	}
-
-	#ownsFocus(component: Component | null): boolean {
-		for (const form of this.#forms.values()) {
-			if (form.owns(component)) return true;
-		}
-		return false;
+	release(): void {
+		if (this.#claimed) this.#forms.get(this.#claimed)?.model.focused.set(false);
+		this.#claimed = undefined;
 	}
-
-	#releaseKeys(): void {
-		if (this.#ownsFocus(this.host.getFocused())) this.host.setFocus(this.#returnFocus);
+	key(key: KeyEvent): boolean {
+		if (this.#disposed || key.kind === "release" || !this.#claimed) return false;
+		const form = this.#forms.get(this.#claimed);
+		if (!form?.live) { this.release(); return false; }
+		return form.key(key);
 	}
-
-	#sync(): void {
+	switchTab(tab: "pending" | "answered"): void {
+		if (this.#disposed || !this.#expanded) return;
+		this.release();
+		this.#tab = tab;
+		this.#scrollVersion++;
+		this.#retry = undefined;
+		this.#revision.update(n => n + 1);
+	}
+	form(id: string): InboxForm | undefined { return this.#forms.get(id); }
+	#sync(keepOpen = false): void {
 		if (this.#disposed || this.#submitting) return;
 		const questions = this.actions.questions();
-		const pending = questions.some((q) => q.status === "pending");
-		if (this.#hadPending && !pending) {
-			this.#releaseKeys();
+		const pending = questions.some(q => q.status === "pending");
+		if (this.#hadPending && !pending && !keepOpen) {
+			this.release();
 			this.#expanded = false;
 			this.#retry = undefined;
 		}
 		this.#hadPending = pending;
 		for (const [id, form] of this.#forms) {
-			if (questions.some((q) => q.id === id && q.status === "pending")) continue;
-			if (form.owns(this.host.getFocused())) this.#releaseKeys();
+			if (questions.some(q => q.id === id && q.status === "pending")) continue;
+			if (this.#claimed === id) this.release();
 			form.dispose();
 			this.#forms.delete(id);
 			this.#skipped.delete(id);
 		}
-		if (
-			this.#retry &&
-			!questions.some((q) => q.id === this.#retry && (q.delivery === "failed" || q.delivery === "unconfirmed"))
-		) {
-			this.#retry = undefined;
-		}
+		if (this.#retry && !questions.some(q => q.id === this.#retry && (q.delivery === "failed" || q.delivery === "unconfirmed"))) this.#retry = undefined;
 		if (this.#expanded && !this.actions.errors().length) {
 			for (const question of questions) {
 				if (question.status !== "pending" || this.#forms.has(question.id)) continue;
-				const interactive = () =>
-					!this.#disposed &&
-					this.#expanded &&
-					this.#tab === "pending" &&
-					!this.#retry &&
-					!this.actions.errors().length &&
-					this.actions.questions().some((q) => q.id === question.id && q.status === "pending");
-				const form: PanelForm = new PanelForm(
-					question.html,
-					{
-						title: sanitizeText(question.title),
-						tui: this.host,
-						cwd: this.cwd,
-						acceptImages: false,
-						claimKeys: () => this.#claimKeys(form),
-						releaseKeys: () => this.#releaseKeys(),
-						onCancel: () => {
-							if (!interactive()) return;
-							this.#skipped.add(question.id);
-							this.#releaseKeys();
-							const next = this.actions
-								.questions()
-								.find((q) => q.status === "pending" && !this.#skipped.has(q.id) && this.#forms.has(q.id));
-							if (next) this.#claimKeys(this.#forms.get(next.id)!);
-							else this.#collapse();
-						},
-						onSubmit: (data, notes) => {
-							if (!interactive()) return;
-							this.#submitting = true;
-							this.#message = "";
-							try {
-								this.actions.submit(question.id, data, notes);
-							} catch (error) {
-								this.#message = String(error);
-								if (this.actions.questions().find((q) => q.id === question.id)?.status === "answered") {
-									this.#releaseKeys();
-									this.#tab = "answered";
-								}
-							} finally {
-								this.#submitting = false;
-								this.#sync();
-							}
-						},
+				const interactive = () => !this.#disposed && this.#expanded && this.#tab === "pending" && !this.#retry
+					&& !this.actions.errors().length && this.actions.questions().some(q => q.id === question.id && q.status === "pending");
+				this.#forms.set(question.id, new InboxForm(question, interactive, {
+					claim: () => this.claim(question.id),
+					release: () => this.release(),
+					skip: () => {
+						this.#skipped.add(question.id);
+						this.release();
+						const next = this.actions.questions().find(q => q.status === "pending" && !this.#skipped.has(q.id) && this.#forms.has(q.id));
+						if (next) this.claim(next.id);
+						else this.collapse();
+						this.#revision.update(n => n + 1);
 					},
-					interactive,
-				);
-				this.#forms.set(question.id, form);
-			}
-		}
-		this.#refresh();
-		logger.debug("Async Ask panel synchronized", {
-			pending: questions.filter(question => question.status === "pending").length,
-			expanded: this.#expanded,
-		});
-	}
-
-	handleNativeEvent(event: NativeUiEvent): void {
-		if (this.#disposed) return;
-		if (event.type === "toggle" && (event.key === "panel" || event.key.endsWith("/panel"))) {
-			if (event.collapsed) this.#collapse();
-			else this.open();
-			return;
-		}
-		if (!this.#expanded) return;
-		if ((event.type === "select" || event.type === "activate") && event.key.endsWith("inbox-tabs")) {
-			if (event.item !== "pending" && event.item !== "answered") return;
-			this.#releaseKeys();
-			this.#tab = event.item;
-			this.#scrollVersion++;
-			this.#retry = undefined;
-		} else if (event.type === "action") {
-			if (event.act.startsWith("retry:")) {
-				const id = event.act.slice(6);
-				if (
-					this.#tab === "answered" &&
-					this.actions.questions().some((q) => q.id === id && (q.delivery === "unconfirmed" || q.delivery === "failed"))
-				) {
-					this.#releaseKeys();
-					this.#retry = id;
-				}
-			} else if (event.act === "keep") this.#retry = undefined;
-			else if (event.act === "confirm" && this.#retry) {
-				const id = this.#retry;
-				this.#retry = undefined;
-				this.#message = "";
-				try {
-					this.actions.retry(id);
-				} catch (error) {
-					this.#message = String(error);
-				}
-			}
-		}
-		this.#refresh();
-	}
-
-	#question(question: Question): NativeNode {
-		const body: NativeChild[] = [
-			row([
-				questionStatus(
-					this.#skipped.has(question.id) ? "Skipped · still pending"
-						: question.delivery === "failed" ? "Answered · send failed"
-						: question.delivery === "unconfirmed" ? "Answered · delivery unconfirmed"
-						: question.status === "pending" ? "Awaiting answer"
-						: question.status === "withdrawn" ? "Withdrawn" : "Answered",
-					question.delivery === "failed" || question.delivery === "unconfirmed" ? "warning"
-						: question.status === "answered" ? "success" : "muted",
-				),
-				row([text("Asked", { tone: "muted" }), elapsed(Date.now() - question.createdAt)], { gap: "sm" }),
-			], { gap: "sm", justify: "between", wrap: true }),
-			text(sanitizeText(question.blockedWork), { tone: "muted", wrap: "word" }),
-		];
-		if (question.status === "pending") {
-			const form = this.#forms.get(question.id);
-			if (form) body.push(form);
-		} else {
-			if (question.reason) body.push(text(sanitizeText(question.reason), { tone: "muted", wrap: "word" }));
-			if (question.answer) {
-				body.push(
-					node("kv", {
-						items: Object.entries(question.answer.data).map(([k, v]) => ({
-							k: sanitizeText(k),
-							v: sanitizeText(Array.isArray(v) ? v.join(", ") : String(v)),
-						})),
-					}),
-				);
-				body.push(
-					...question.answer.notes.map((note) =>
-						text(sanitizeText(`${note.question} — ${note.option}: ${note.text}`), { wrap: "word" }),
-					),
-				);
-			}
-			if (question.delivery === "failed" || question.delivery === "unconfirmed") {
-				body.push(
-					text(
-						question.delivery === "failed"
-							? "Your answer is saved, but sending failed."
-							: "Answer saved. No delivery receipt is available.",
-						{ tone: "warning", wrap: "word" },
-					),
-				);
-				body.push(
-					node("button", { role: "omp.btn", text: "Review resend…", icon: "repeat", actions: { click: `retry:${question.id}` } }),
-				);
-			}
-		}
-		return node("section", { role: "async-ask.question", head: sanitizeText(question.title) }, body, question.id);
-	}
-
-	describe(context: DescribeContext): NativeNode {
-		if (!this.#styled) this.#styled = applyQuestionStyles(context);
-		if (this.#native && this.#rows === this.host.terminal.rows) return this.#native;
-		this.#rows = this.host.terminal.rows;
-		const questions = this.actions.questions();
-		const pending = questions.filter((q) => q.status === "pending").length;
-		if (!pending && !this.#expanded) return (this.#native = col([], { hidden: true }));
-		const answered = questions.filter((q) => q.status !== "pending").length;
-		const failed = questions.filter((q) => q.delivery === "failed").length;
-		const label = `${pending} pending${failed ? ` · ${failed} send failed` : ""}${this.actions.errors().length ? " · history error" : ""}`;
-		const children: NativeChild[] = [];
-		const cardBody: NativeChild[] = [];
-		if (this.#expanded) {
-			cardBody.push(
-				node(
-					"tabs",
-					{
-						items: [
-							{ id: "pending", label: `Pending (${pending})` },
-							{ id: "answered", label: `Answered (${answered})` },
-						],
-						active: this.#tab,
-						variant: "underline",
+					submit: (data, notes) => {
+						this.#submitting = true;
+						this.#message = "";
+						let failed = false;
+						try { this.actions.submit(question.id, data, notes); }
+						catch (error) {
+							failed = true;
+							this.#message = String(error);
+							if (this.actions.questions().some(q => q.id === question.id && q.status === "answered")) this.#tab = "answered";
+						} finally {
+							this.release();
+							this.#submitting = false;
+							this.#sync(failed);
+						}
 					},
-					undefined,
-					"inbox-tabs",
-				),
-			);
-			const body: NativeChild[] = [];
-			if (this.#retry) {
-				body.push(
-					questionStatus("Delivery is unconfirmed. Retrying may deliver the answer twice.", "warning"),
-					row(
-						[
-							node("button", { role: "omp.btn", text: "Retry answer", variant: "danger", actions: { click: "confirm" } }),
-							node("button", { role: "omp.btn", text: "Keep current state", actions: { click: "keep" } }),
-						],
-						{ gap: "sm", wrap: true },
-					),
-				);
-			} else {
-				const visible = questions.filter((q) =>
-					this.#tab === "pending" ? q.status === "pending" : q.status !== "pending",
-				);
-				body.push(...visible.map((q) => this.#question(q)));
-				if (!visible.length)
-					body.push(
-						text(this.#tab === "pending" ? "No pending questions." : "No answered questions yet.", { tone: "muted" }),
-					);
+				}));
 			}
-			if (this.#message) body.push(questionStatus(sanitizeText(this.#message), "warning"));
-			body.push(...this.actions.errors().map((error) => questionStatus(sanitizeText(error), "error")));
-			const scroller = node(
-				"col",
-				{
-					role: "async-ask.body",
-					gap: "sm",
-					max: { h: `${Math.max(4, Math.floor(this.host.terminal.rows * 0.5))}lines` },
-				},
-				body,
-				"questions",
-			);
-			cardBody.push({ ...scroller, scroll: { by: "start", n: this.#scrollVersion } });
 		}
-		children.push(
-			questionBlock(context,
-				{
-					role: "async-ask.panel",
-					title: "Questions",
-					target: label,
+		if (this.actions.errors().length) this.release();
+		this.#revision.update(n => n + 1);
+	}
+	retry(id: string): void {
+		if (this.#disposed || !this.#expanded || this.#tab !== "answered") return;
+		if (!this.actions.questions().some(q => q.id === id && (q.delivery === "failed" || q.delivery === "unconfirmed"))) return;
+		this.release();
+		this.#retry = id;
+		this.#revision.update(n => n + 1);
+	}
+	confirm(): void {
+		if (!this.#retry || this.#disposed) return;
+		const id = this.#retry;
+		this.#retry = undefined;
+		this.#message = "";
+		try { this.actions.retry(id); } catch (error) { this.#message = String(error); }
+		this.#revision.update(n => n + 1);
+	}
+	keep(): void { this.#retry = undefined; this.#revision.update(n => n + 1); }
+	#question(question: Question): UiNode {
+		const form = this.#forms.get(question.id);
+		return new UiNode("section", { role: "async-ask.question", head: clean(question.title), children: [
+			questionStatus(this.#skipped.has(question.id) ? "Skipped · still pending" : questionState(question),
+				question.delivery === "failed" || question.delivery === "unconfirmed" ? "warning" : question.status === "answered" ? "success" : "muted"),
+			new UiNode("text", { text: clean(question.blockedWork), tone: "muted", wrap: "word" }),
+			new UiNode("elapsed", { age: Date.now() - question.createdAt }),
+			...(question.status === "pending" && form ? [form.view(this.host, this.cwd)] : answerNodes(question)),
+			...((question.delivery === "failed" || question.delivery === "unconfirmed") ? [
+				new UiNode("text", { text: question.delivery === "failed" ? "Your answer is saved, but sending failed." : "Answer saved. No delivery receipt is available.", tone: "warning" }),
+				new UiNode("button", { text: "Review resend…", actions: { click: "retry" }, onAction: () => this.retry(question.id) }),
+			] : []),
+		] }, question.id);
+	}
+	view(): UiNode {
+		onCleanup(() => this.dispose());
+		return new UiNode("col", { role: "async-ask.dock", gap: "sm", children: () => {
+			this.#revision();
+			const questions = this.actions.questions();
+			const pending = questions.filter(q => q.status === "pending").length;
+			if (!pending && !this.#expanded) return [];
+			const failed = questions.filter(q => q.delivery === "failed").length;
+			const body: JSXNode[] = [];
+			if (this.#expanded) {
+				body.push(new UiNode("tabs", {
+					items: [{ id: "pending", label: `Pending (${pending})` }, { id: "answered", label: `Answered (${questions.length - pending})` }],
+					active: this.#tab, variant: "underline",
+					onSelect: (tab: string) => { if (tab === "pending" || tab === "answered") this.switchTab(tab); },
+				}));
+				const visible = questions.filter(q => this.#tab === "pending" ? q.status === "pending" : q.status !== "pending");
+				body.push(new UiNode("col", {
+					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(4, Math.floor(this.host.size().rows * 0.5))}lines` }),
+					scroll: { by: "start", n: this.#scrollVersion },
+					children: [
+						...(this.#retry ? [
+							questionStatus("Delivery is unconfirmed. Retrying may deliver the answer twice.", "warning"),
+							new UiNode("row", { gap: "sm", children: [
+								new UiNode("button", { text: "Retry answer", actions: { click: "confirm" }, onAction: () => this.confirm() }),
+								new UiNode("button", { text: "Keep current state", actions: { click: "keep" }, onAction: () => this.keep() }),
+							] }),
+						] : visible.length ? visible.map(q => this.#question(q)) : [new UiNode("text", { text: this.#tab === "pending" ? "No pending questions." : "No answered questions yet." })]),
+						...(this.#message ? [questionStatus(this.#message, "warning")] : []),
+						...this.actions.errors().map(error => questionStatus(error, "error")),
+					],
+				}));
+			}
+			return [
+				questionBlock({ role: "async-ask.panel", title: "Questions",
+					target: `${pending} pending${failed ? ` · ${failed} send failed` : ""}${this.actions.errors().length ? " · history error" : ""}`,
 					status: failed || this.actions.errors().length ? "error" : pending ? "pending" : "done",
-					collapsed: !this.#expanded,
-					preview: { lines: 0 },
-				},
-				cardBody,
-				"panel",
-			),
-		);
-		// The native composer's context gauge sits above its layout box, even while idle.
-		children.push(
-			node(
-				"spacer",
-				{ role: "async-ask.clearance", size: "none", min: { h: "1lines" }, shrink: 0 },
-				undefined,
-				"clearance",
-			),
-		);
-		return (this.#native = row(
-			[
-				node("spacer", { grow: 1 }),
-				col(children, { gap: "sm", role: "async-ask.dock", grow: 100, min: { w: 0 }, max: { w: "92ch" } }),
-				node("spacer", { grow: 1 }),
-			],
-			{ align: "start" },
-		));
+					collapsed: !this.#expanded, preview: { lines: 0 } }, body, "panel", collapsed => collapsed ? this.collapse() : this.open()),
+				new UiNode("spacer", { role: "async-ask.clearance", size: "none", min: { h: "1lines" }, shrink: 0 }),
+			];
+		} });
 	}
-
-	render(): readonly string[] {
-		if (!this.#expanded && !this.#hadPending) return [];
-		return [
-			`Questions · ${this.actions.questions().filter((q) => q.status === "pending").length} pending · /questions`,
-			"",
-		];
-	}
-
-	#refresh(): void {
-		this.invalidate();
-		this.host.requestRender();
-	}
-
-	invalidate(): void {
-		this.#native = undefined;
-	}
-
 	dispose(): void {
 		if (this.#disposed) return;
 		this.#disposed = true;
-		logger.debug("Async Ask panel disposed");
+		this.release();
 		this.#unsubscribe();
-		this.#releaseKeys();
+		this.#unsubscribeKeys?.();
 		for (const form of this.#forms.values()) form.dispose();
 		this.#forms.clear();
 	}

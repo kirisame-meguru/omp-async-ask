@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { CustomMessagePayload, SessionEntry } from "@oh-my-pi/pi-coding-agent";
-import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
+import type { HtmlFormData } from "@oh-my-pi/pi-coding-agent/tools/html-form/data";
 import { logger, prompt } from "@oh-my-pi/pi-utils";
 import answerTemplate from "./prompts/answer.md" with { type: "text" };
 import { summarizeAnswer } from "./presentation";

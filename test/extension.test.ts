@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, expect, spyOn, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { type as arktype } from "@oh-my-pi/omptype";
 import { Agent, type AgentTool } from "@oh-my-pi/pi-agent-core";
 import { createMockModel } from "@oh-my-pi/pi-ai/providers/mock";
@@ -10,34 +10,28 @@ import type {
 	ExtensionUIContext,
 	ToolDefinition,
 } from "@oh-my-pi/pi-coding-agent";
-import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
-import type { Component, TUI } from "@oh-my-pi/pi-tui";
-import type { MessageRenderer } from "@oh-my-pi/pi-tui/chat/extension-types";
-import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
-import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
-import type { CustomMessage } from "@oh-my-pi/pi-tui/chat/messages";
-import { TspHarness } from "./tsp-harness";
-import * as terminal from "@oh-my-pi/pi-tui";
+import { isUiNode, setNativeRenderingForTest, type KeyEvent, type UiNode } from "@oh-my-pi/pi-tui";
+import type { MessageRenderer } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/render-types";
+import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/transcript/messages";
+import { UiHarness } from "./ui-harness";
+import * as terminal from "@oh-my-pi/pi-tui/driver/session";
 import { logger } from "@oh-my-pi/pi-utils";
 import asyncAsk from "../src/index";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { AVAILABLE, CONNECT, type AsyncQuestion, type QuestionSource } from "../src/bridge";
 import goalPolicy from "../src/prompts/goal-policy.md" with { type: "text" };
 import { ANSWER_TYPE, EVENT_TYPE, type QuestionEvent } from "../src/state";
-import { QuestionInbox } from "../src/ui";
-import { QuestionPanel } from "../src/panel";
 import { input, journal } from "./helpers";
 
-beforeAll(async () => {
-	await initTheme(false);
-});
 const cleanupFixtures: (() => unknown)[] = [];
 afterEach(async () => {
 	for (const cleanup of cleanupFixtures.splice(0)) await cleanup();
+	setNativeRenderingForTest(false);
 });
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
-function fixture(nativeHost?: TUI) {
+function fixture(options: { native?: boolean; deferred?: boolean } = {}) {
+	setNativeRenderingForTest(options.native ?? false);
 	const log = journal();
 	const handlers = new Map<string, Handler>();
 	const tools: ToolDefinition[] = [];
@@ -50,24 +44,41 @@ function fixture(nativeHost?: TUI) {
 	let kind = "main";
 	let hasUI = true;
 	let openCount = 0;
-	let component: Component | undefined;
-	let widget: (Component & { dispose?: () => void }) | undefined;
+	let component: UiHarness | undefined;
+	let widget: UiHarness | undefined;
+	let pendingWidget: Parameters<ExtensionUIContext["setWidget"]>[1];
+	const keys = new Set<(key: KeyEvent) => boolean>();
+	const flushWidget = () => {
+		if (typeof pendingWidget !== "function") return;
+		const factory = pendingWidget;
+		pendingWidget = undefined;
+		widget = new UiHarness(host => {
+			const result = factory(host, {} as never);
+			if (!isUiNode(result)) throw new Error("Expected current reactive widget node");
+			return result;
+		});
+	};
 	const ui = {
+		composer: { addKeyHandler: (handler: (key: KeyEvent) => boolean) => {
+			keys.add(handler); return () => { keys.delete(handler); };
+		} },
 		setWidget: (_key: string, content: Parameters<ExtensionUIContext["setWidget"]>[1]) => {
-			if (nativeHost && widget) nativeHost.removeChild(widget);
-			widget?.dispose?.();
-			widget =
-				typeof content === "function" ? content(nativeHost ?? { requestRender: () => {} } as never, {} as never) : undefined;
-			if (nativeHost && widget) nativeHost.addChild(widget);
+			widget?.dispose();
+			widget = undefined;
+			pendingWidget = content;
+			if (!options.deferred) flushWidget();
 		},
 		notify: () => {},
 		custom: (factory: Parameters<ExtensionUIContext["custom"]>[0], options?: { signal?: AbortSignal }) => {
 			openCount++;
 			const result = Promise.withResolvers<unknown>();
-			const host = { terminal: { rows: 30 }, requestRender: () => {} };
-			component = factory(host as never, {} as never, {} as never, result.resolve) as Component;
+			component = new UiHarness(host => {
+				const output = factory(host, {} as never, {} as never, result.resolve);
+				if (!isUiNode(output)) throw new Error("Expected current reactive custom node");
+				return output;
+			});
 			options?.signal?.addEventListener("abort", () => result.reject(new Error("aborted")), { once: true });
-			return result.promise;
+			return result.promise.finally(() => { component?.dispose(); });
 		},
 	};
 	const ctx = {
@@ -108,6 +119,7 @@ function fixture(nativeHost?: TUI) {
 	} as unknown as ExtensionAPI;
 	asyncAsk(api);
 	cleanupFixtures.push(() => handlers.get("session_shutdown")?.({ type: "session_shutdown" }, ctx));
+	cleanupFixtures.push(() => { widget?.dispose(); component?.dispose(); });
 	return {
 		events: api.events,
 		ctx,
@@ -133,6 +145,8 @@ function fixture(nativeHost?: TUI) {
 		opened: () => openCount,
 		component: () => component,
 		widget: () => widget,
+		flushWidget,
+		keyHandlers: () => keys.size,
 	};
 }
 
@@ -259,8 +273,8 @@ test("only an explicit user command opens the inbox and closing it submits nothi
 	await fx.tools[0]!.execute("one", { op: "create", ...input }, undefined, undefined, fx.ctx);
 	const opened = fx.commands.get("questions")!.handler("", fx.ctx);
 	expect(fx.opened()).toBe(1);
-	fx.component()?.handleInput?.("\u001b");
-	fx.component()?.handleInput?.("\u001b");
+	fx.component()!.terminal.press("escape");
+	fx.component()!.terminal.press("escape");
 	await opened;
 	expect(fx.sent).toEqual([]);
 	expect(fx.log.entries).toHaveLength(1);
@@ -276,54 +290,73 @@ test("Questions widget exists only while pending; the command still opens answer
 		tool.execute("withdraw", { op: "withdraw", id, reason: "Resolved" }, undefined, undefined, fx.ctx);
 	const first = await create("first");
 	const indicator = fx.widget();
-	expect(indicator?.render(100).join("")).toContain("1 pending");
+	expect(indicator?.snapshot()).toContain("1 pending");
 	await create("second");
 	expect(fx.widget()).toBe(indicator);
-	expect(indicator?.render(100).join("")).toContain("2 pending");
+	expect(indicator?.snapshot()).toContain("2 pending");
 	await withdraw(arktype({ id: "string" }).assert(first.details).id);
-	expect(fx.widget()?.render(100).join("")).toContain("1 pending");
+	expect(fx.widget()?.snapshot()).toContain("1 pending");
 
 	const opening = fx.commands.get("questions")!.handler("", fx.ctx);
 	const inbox = fx.component();
-	if (!(inbox instanceof QuestionInbox)) throw new Error("Expected the real question inbox");
-	inbox.handleInput("staging");
-	inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
+	if (!inbox) throw new Error("Expected question inbox");
+	inbox.terminal.type("staging");
+	inbox.action(inbox.find(node => node.props().role === "omp.btn" && node.props().actions?.click === "submit"), "submit");
 	await opening;
 	expect(fx.sent).toHaveLength(1);
 	expect(fx.widget()).toBeUndefined();
 
 	const history = fx.commands.get("questions")!.handler("", fx.ctx);
 	const reopened = fx.component();
-	if (!(reopened instanceof QuestionInbox)) throw new Error("Expected answer history");
-	expect(reopened.debugState()).toMatchObject({ tab: "answered" });
+	if (!reopened) throw new Error("Expected answer history");
+	expect(reopened.find(node => node.kind === "tabs").props()).toMatchObject({ active: "answered" });
 	expect(fx.widget()).toBeUndefined();
-	reopened.handleNativeEvent({ type: "action", key: "", act: "close", mods: [] });
+	reopened.action(reopened.find(node => node.kind === "button" && node.props().actions?.click === "close"), "close");
 	await history;
 
 	const third = await create("third");
-	expect(fx.widget()?.render(100).join("")).toContain("1 pending");
+	expect(fx.widget()?.snapshot()).toContain("1 pending");
 	await withdraw(arktype({ id: "string" }).assert(third.details).id);
 	expect(fx.widget()).toBeUndefined();
 });
 
-test("native command opens the same retained dock panel without creating a modal", async () => {
-	const harness = await TspHarness.start();
-	try {
-		const fx = fixture(harness.tui);
-		await fx.emit("session_start");
-		const created = await fx.tools[0]!.execute("one", { op: "create", ...input }, undefined, undefined, fx.ctx);
-		const widget = fx.widget();
-		expect(widget).toBeInstanceOf(QuestionPanel);
-		await fx.commands.get("questions")!.handler("", fx.ctx);
-		expect(fx.opened()).toBe(0);
-		expect(fx.widget()).toBe(widget);
-		await fx.tools[0]!.execute("withdraw", { op: "withdraw", id: arktype({ id: "string" }).assert(created.details).id, reason: "Resolved" }, undefined, undefined, fx.ctx);
-		expect(fx.widget()).toBe(widget);
-		await fx.emit("session_before_switch");
-		expect(fx.widget()).toBeUndefined();
-		widget?.handleNativeEvent?.({ type: "toggle", key: "panel", collapsed: true });
-		expect(fx.sent).toEqual([]);
-	} finally { harness.stop(); }
+test("native command opens retained panel, releases key hooks and rejects obsolete nodes on switch", async () => {
+	const fx = fixture({ native: true });
+	await fx.emit("session_start");
+	const created = await fx.tools[0]!.execute("one", { op: "create", ...input }, undefined, undefined, fx.ctx);
+	const widget = fx.widget()!;
+	await fx.commands.get("questions")!.handler("", fx.ctx);
+	expect(fx.opened()).toBe(0);
+	expect(fx.widget()).toBe(widget);
+	expect(widget.find(node => node.kind === "tabs")).toBeDefined();
+	expect(fx.keyHandlers()).toBe(1);
+	await fx.tools[0]!.execute("withdraw", { op: "withdraw", id: arktype({ id: "string" }).assert(created.details).id, reason: "Resolved" }, undefined, undefined, fx.ctx);
+	expect(fx.widget()).toBe(widget);
+	await fx.emit("session_before_switch");
+	expect(fx.widget()).toBeUndefined();
+	expect(fx.keyHandlers()).toBe(0);
+	expect(fx.sent).toEqual([]);
+});
+
+test("deferred widget factory retains explicit open intent across pending changes and no-pending history", async () => {
+	const fx = fixture({ native: true, deferred: true });
+	await fx.emit("session_start");
+	await fx.commands.get("questions")!.handler("", fx.ctx);
+	expect(fx.widget()).toBeUndefined();
+	const created = await fx.tools[0]!.execute("one", { op: "create", ...input }, undefined, undefined, fx.ctx);
+	fx.flushWidget();
+	expect(fx.widget()!.find(node => node.kind === "tabs").props()).toMatchObject({ active: "pending" });
+	expect(fx.opened()).toBe(0);
+	await fx.tools[0]!.execute("withdraw", { op: "withdraw", id: arktype({ id: "string" }).assert(created.details).id, reason: "Resolved" }, undefined, undefined, fx.ctx);
+	await fx.emit("session_start");
+	await fx.commands.get("questions")!.handler("", fx.ctx);
+	fx.flushWidget();
+	expect(fx.widget()!.find(node => node.kind === "tabs").props()).toMatchObject({ active: "answered" });
+	expect(fx.keyHandlers()).toBe(1);
+	await fx.emit("session_before_switch");
+	fx.flushWidget();
+	expect(fx.widget()).toBeUndefined();
+	expect(fx.keyHandlers()).toBe(0);
 });
 
 test("switch invalidates an open inbox and does not inherit its pending questions", async () => {
@@ -335,7 +368,7 @@ test("switch invalidates an open inbox and does not inherit its pending question
 	await fx.emit("session_before_switch");
 	fx.switchSession();
 	await fx.emit("session_switch");
-	old?.handleInput?.("\r");
+	old?.terminal.press("enter");
 	await opened;
 	const listed = await fx.tools[0]!.execute("list", { op: "list" }, undefined, undefined, fx.ctx);
 	expect(listed.details).toMatchObject({ questions: [] });
@@ -370,42 +403,27 @@ test("context restoration exposes pending dependencies without replaying questio
 	expect(fx.opened()).toBe(0);
 });
 
-test("pending questions own a native attention record until answered or withdrawn", async () => {
+test("pending questions own native attention until the final answer or withdrawal", async () => {
 	const reports: string[] = [];
-	const writer = spyOn(terminal, "writeTerminalSequence").mockImplementation(data => {
-		reports.push(data);
-	});
-	const harness = await TspHarness.start();
-	const fx = fixture(harness.tui);
+	const writer = spyOn(terminal, "writeTerminalSequence").mockImplementation(data => { reports.push(data); });
+	const fx = fixture({ native: true });
 	try {
 		await fx.emit("session_start");
-		expect(reports).toEqual([]);
 		const tool = fx.tools[0]!;
-		const create = (id: string) =>
-			tool.execute(id, { op: "create", ...input, key: id }, undefined, undefined, fx.ctx);
-		const first = await create("first");
-		await create("second");
-		expect(reports).toEqual([
-			"\x1b]7501;state=blocked:kind=question:id=omp-async-ask:app=omp:title=UXVlc3Rpb25z\x1b\\",
-		]);
-		const firstId = arktype({ id: "string" }).assert(first.details).id;
-		await tool.execute("withdraw", { op: "withdraw", id: firstId, reason: "Resolved" }, undefined, undefined, fx.ctx);
+		const first = await tool.execute("first", { op: "create", ...input }, undefined, undefined, fx.ctx);
+		await tool.execute("second", { op: "create", ...input }, undefined, undefined, fx.ctx);
+		expect(reports).toEqual(["\x1b]7501;state=blocked:kind=question:id=omp-async-ask:app=omp:title=UXVlc3Rpb25z\x1b\\"]);
+		await tool.execute("withdraw", { op: "withdraw", id: arktype({ id: "string" }).assert(first.details).id, reason: "Resolved" }, undefined, undefined, fx.ctx);
 		expect(reports).toHaveLength(1);
 		await fx.commands.get("questions")!.handler("", fx.ctx);
-		await harness.render();
-		const form = harness.find(node => node.k === "input")!;
-		harness.event({ ev: "edit", sf: harness.terminal.surface!, id: form.id, from: 0, to: 0, text: "staging", cursor: 7, len: 0 });
-		const submit = harness.find(node => node.k === "button" && node.p?.actions?.click === "submit")!;
-		harness.event({ ev: "action", sf: harness.terminal.surface!, id: submit.id, act: "submit", mods: [] });
+		const widget = fx.widget()!;
+		const field = widget.find(node => node.kind === "input");
+		widget.event(field, { type: "edit", key: "", from: 0, to: 0, text: "staging", cursor: 7, len: 0 });
+		widget.action(widget.find(node => node.props().role === "omp.btn" && node.props().actions?.click === "submit"), "submit");
 		expect(fx.sent).toHaveLength(1);
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
 		expect(fx.opened()).toBe(0);
-		await fx.emit("session_shutdown");
-	} finally {
-		await fx.emit("session_shutdown");
-		harness.stop();
-		writer.mockRestore();
-	}
+	} finally { await fx.emit("session_shutdown"); writer.mockRestore(); }
 });
 
 test("native attention follows rendering availability, restored questions and session ownership", async () => {
@@ -414,23 +432,23 @@ test("native attention follows rendering availability, restored questions and se
 		reports.push(data);
 	});
 	const fx = fixture();
-	terminal.setNativeRendering(false);
+	setNativeRenderingForTest(false);
 	try {
 		await fx.emit("session_start");
 		await fx.tools[0]!.execute("pending", { op: "create", ...input }, undefined, undefined, fx.ctx);
 		expect(reports).toEqual([]);
-		terminal.setNativeRendering(true);
+		setNativeRenderingForTest(true);
 		expect(reports).toHaveLength(1);
 		expect(reports.at(-1)).toContain("state=blocked:kind=question:id=omp-async-ask");
-		terminal.setNativeRendering(false);
+		setNativeRenderingForTest(false);
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
-		terminal.setNativeRendering(true);
+		setNativeRenderingForTest(true);
 		expect(reports).toHaveLength(3);
 		await fx.emit("session_start");
 		expect(reports).toHaveLength(5);
 		expect(reports.at(-2)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
 		expect(reports.at(-1)).toContain("state=blocked");
-		expect(fx.widget()?.render(100).join("")).toContain("1 pending");
+		expect(fx.widget()?.snapshot()).toContain("1 pending");
 		await fx.emit("session_before_switch");
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
 		expect(fx.widget()).toBeUndefined();
@@ -439,58 +457,48 @@ test("native attention follows rendering availability, restored questions and se
 		expect(reports).toHaveLength(6);
 		expect(fx.widget()).toBeUndefined();
 		await fx.emit("session_shutdown");
-		terminal.setNativeRendering(false);
-		terminal.setNativeRendering(true);
+		setNativeRenderingForTest(false);
+		setNativeRenderingForTest(true);
 		expect(reports).toHaveLength(6);
 	} finally {
 		await fx.emit("session_shutdown");
-		terminal.setNativeRendering(false);
+		setNativeRenderingForTest(false);
 		writer.mockRestore();
 	}
 });
 
-test("Tern question cards hide transport payloads and open the real inbox", async () => {
-	const harness = await TspHarness.start();
-	const fx = fixture(harness.tui);
+test("reactive tool cards hide transport payloads, open the panel and follow answer state", async () => {
+	const fx = fixture({ native: true });
 	await fx.emit("session_start");
 	const tool = fx.tools[0]!;
 	const args = { op: "create", ...input };
 	const result = await tool.execute("native-question", args, undefined, undefined, fx.ctx);
-	const card = new ToolExecutionComponent(tool.name, args, {}, tool as unknown as AgentTool, harness.tui);
-	card.setArgsComplete();
-	card.updateResult(result);
-	harness.tui.addChild(card);
-	await harness.render();
+	const card = new UiHarness(() => {
+		const node = tool.renderResult!(result, { expanded: false, isPartial: false }, {} as never, args);
+		if (!isUiNode(node)) throw new Error("Expected reactive tool renderer");
+		return node;
+	});
 	try {
-		const drawn = JSON.stringify(harness.doc());
-		expect(drawn).toContain(input.title);
-		expect(drawn).toContain("Awaiting answer");
-		expect(drawn).not.toContain("<form");
-		expect(drawn).not.toContain("No user answer has been given");
-		expect(drawn).not.toContain("blockedWork=");
-		const button = harness.find(node => node.k === "button" && node.p?.text === "Open questions");
-		expect(button).toBeDefined();
-		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
+		expect(card.snapshot()).toContain("Awaiting answer");
+		expect(card.snapshot()).not.toContain("<form");
+		expect(card.snapshot()).not.toContain("No user answer has been given");
+		const button = card.find(node => node.kind === "button");
+		card.action(button, "open");
 		expect(fx.opened()).toBe(0);
-		expect(fx.widget()).toBeInstanceOf(QuestionPanel);
-		expect(harness.errors).toEqual([]);
+		expect(fx.widget()!.find(node => node.kind === "tabs")).toBeDefined();
 		let source: QuestionSource | undefined;
 		fx.events.emit(CONNECT, { version: 1, sessionId: "a", accept: (value: QuestionSource) => { source = value; } });
 		let pending: readonly AsyncQuestion[] = [];
 		source!.subscribe(value => { pending = value; });
 		pending[0]!.submitConfirmed({ target: "stage" });
-		harness.flush();
-		expect(JSON.stringify(harness.doc())).toContain("Answered");
-		expect(JSON.stringify(harness.doc())).not.toContain("Awaiting answer");
+		expect(card.snapshot()).toContain("Answered");
+		expect(card.snapshot()).not.toContain("Awaiting answer");
 		await fx.emit("session_before_switch");
 		fx.switchSession();
 		await fx.emit("session_switch");
-		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
-		expect(fx.opened()).toBe(0);
+		card.action(card.find(node => node.kind === "button"), "open");
 		expect(fx.widget()).toBeUndefined();
-	} finally {
-		harness.stop();
-	}
+	} finally { card.dispose(); }
 });
 
 test("Tern answer cards show selected labels while preserving the full agent message", async () => {
@@ -509,11 +517,10 @@ test("Tern answer cards show selected labels while preserving the full agent mes
 	pending[0]!.submitConfirmed({ target: "stage", notes: "", retries: 0 });
 	const message = { ...(fx.sent[0] as CustomMessage), role: "custom" as const, timestamp: 1 };
 	const original = JSON.stringify(message);
-	const harness = await TspHarness.start(tui => {
-		tui.addChild(new CustomMessageComponent(message, fx.renderers.get(ANSWER_TYPE)));
-	});
+	const renderer = fx.renderers.get(ANSWER_TYPE)!;
+	const harness = new UiHarness(() => renderer(message, { expanded: false }, {} as never) as UiNode);
 	try {
-		const drawn = JSON.stringify(harness.doc());
+		const drawn = harness.snapshot();
 		expect(drawn).toContain("Answer submitted");
 		expect(drawn).toContain("Choose a destination");
 		expect(drawn).toContain("Staging environment");
@@ -524,23 +531,23 @@ test("Tern answer cards show selected labels while preserving the full agent mes
 		expect(JSON.stringify(message)).toBe(original);
 		expect(message.content).toContain(question.html);
 		expect(message.content).toContain('"target": "stage"');
-		const card = harness.find(node => node.p?.role === "async-ask.answer");
-		expect(card).toBeDefined();
-		harness.event({ ev: "toggle", sf: harness.terminal.surface!, id: card!.id, collapsed: false });
-		expect(JSON.stringify(harness.doc())).toContain("Question ID:");
-		expect(harness.errors).toEqual([]);
+		const card = harness.find(node => node.props().role === "async-ask.answer");
+		harness.event(card, { type: "toggle", key: "", collapsed: false });
+		expect(harness.snapshot()).toContain("Question ID:");
 		// Existing sessions have only identity metadata; recover their labels from the owning journal.
 		const { presentation: _presentation, ...legacyDetails } = message.details as Record<string, unknown>;
 		const legacy = { ...message, details: legacyDetails };
-		const renderer = fx.renderers.get(ANSWER_TYPE)!;
-		expect(renderer(legacy, { expanded: false }, theme)?.render(100).join("\n")).toContain("Staging environment");
+		const legacyHarness = new UiHarness(() => renderer(legacy, { expanded: false }, {} as never) as UiNode);
+		expect(legacyHarness.snapshot()).toContain("Staging environment");
+		legacyHarness.dispose();
 		await fx.emit("session_before_switch");
 		fx.switchSession();
 		await fx.emit("session_switch");
-		expect(renderer(legacy, { expanded: false }, theme)).toBeUndefined();
-		// New messages are self-contained even when their session is no longer connected.
-		expect(renderer(message, { expanded: false }, theme)?.render(100).join("\n")).toContain("Staging environment");
+		expect(renderer(legacy, { expanded: false }, {} as never)).toBeUndefined();
+		const saved = new UiHarness(() => renderer(message, { expanded: false }, {} as never) as UiNode);
+		expect(saved.snapshot()).toContain("Staging environment");
+		saved.dispose();
 	} finally {
-		harness.stop();
+		harness.dispose();
 	}
 });

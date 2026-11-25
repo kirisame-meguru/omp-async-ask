@@ -1,7 +1,7 @@
-import { type Component, matchesKey, ProcessTerminal, Text, TUI, writeTerminalSequence } from "@oh-my-pi/pi-tui";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { CustomMessagePayload } from "@oh-my-pi/pi-coding-agent";
-import { text } from "@oh-my-pi/pi-tui/native/describe";
+import { createSurface, signal, startHost, UiNode, type Host, type JSXNode } from "@oh-my-pi/pi-tui";
+import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
+import { writeTerminalSequence } from "@oh-my-pi/pi-tui/driver/session";
+import type { CustomMessagePayload, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
 import { isRecord } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "../src/attention";
 import { AnswerDelivery } from "../src/delivery";
@@ -9,114 +9,86 @@ import { QuestionStore } from "../src/state";
 import { type InboxActions, QuestionInbox, QuestionIndicator } from "../src/ui";
 import { input, journal, recordedEntry } from "./helpers";
 
-await initTheme(false);
-const tui = new TUI(new ProcessTerminal());
 const log = journal();
 const store = new QuestionStore("fixture", log.append);
 const attention = new QuestionAttention(store);
 const queued: CustomMessagePayload[] = [];
 const delivery = new AnswerDelivery(store, {
-	sessionId: () => "fixture",
-	isIdle: () => false,
-	entries: () => log.entries,
-	send: message => {
-		queued.push(message);
-	},
+	sessionId: () => "fixture", isIdle: () => false, entries: () => log.entries,
+	send: message => { queued.push(message); },
 });
 store.create(input, "first");
-store.create(
-	{
-		...input,
-		title: "Retention policy",
-		blockedWork: "Final retention configuration",
-		html: '<form><fieldset><legend>Retention period</legend><label><input type="radio" name="days" value="7" checked>Seven days</label><label><input type="radio" name="days" value="30">Thirty days</label></fieldset></form>',
-	},
-	"second",
-);
-store.create(
-	{
-		...input,
-		title: "Release notes",
-		blockedWork: "Preparing the release announcement",
-		html: '<form><label>Anything to highlight?<textarea name="notes" placeholder="Optional context for the release"></textarea></label></form>',
-	},
-	"third",
-);
-const title = new Text("Async Ask acceptance fixture — no model requests or production actions", 0, 0);
-const work = new Text("Independent work steps: 0", 0, 0);
-const result = new Text("No user answer has been submitted.", 0, 0);
-let closeOverlay: (() => void) | undefined;
+store.create({ ...input, title: "Retention policy", blockedWork: "Final retention configuration",
+	html: '<form><fieldset><legend>Retention period</legend><label><input type="radio" name="days" value="7" checked>Seven days</label><label><input type="radio" name="days" value="30">Thirty days</label></fieldset></form>',
+}, "second");
+store.create({ ...input, title: "Release notes", blockedWork: "Preparing the release announcement",
+	html: '<form><label>Anything to highlight?<textarea name="notes"></textarea></label></form>',
+}, "third");
+const steps = signal(0);
+const result = signal("No user answer has been submitted.");
+const layer = signal<JSXNode>(undefined);
 let inbox: QuestionInbox | undefined;
+let host: Host | undefined;
+const ui: ExtensionUiHost = {
+	size: () => ({ columns: host?.driver.columns ?? 100, rows: host?.driver.rows ?? 30 }),
+	requestRender: () => {},
+	suspend: run => host!.suspend(run),
+};
 const actions: InboxActions = {
-	questions: () => store.list(),
-	errors: () => store.errors,
-	subscribe: callback => store.subscribe(callback),
-	submit: (id, data, notes) => delivery.submit(id, data, notes),
-	retry: id => delivery.retry(id),
-	close: () => {
-		closeOverlay?.();
-		closeOverlay = undefined;
-		inbox?.dispose();
-		inbox = undefined;
-		tui.setFocus(home);
-	},
+	questions: () => store.list(), errors: () => store.errors, subscribe: listener => store.subscribe(listener),
+	submit: (id, data, notes) => delivery.submit(id, data, notes), retry: id => delivery.retry(id),
+	close: () => { inbox?.dispose(); inbox = undefined; layer.set(undefined); surface.focus(home); },
 };
 function open(): void {
 	if (inbox) return;
-	inbox = new QuestionInbox(actions, tui, process.cwd());
-	const handle = tui.showOverlay(inbox, { width: "90%", maxHeight: "90%" });
-	closeOverlay = () => handle.hide();
+	layer.set(() => {
+		inbox = new QuestionInbox(actions, ui, process.cwd());
+		const node = inbox.view();
+		surface.focus(node);
+		return new UiNode("overlay", { head: "Questions", children: node });
+	});
 }
-const indicator = new QuestionIndicator(actions, open, tui);
-const homeHelp = "Press i to open Questions; q to quit. Work continues while forms are open.";
-const home: Component = {
-	render: () => [homeHelp],
-	describe: () => text(homeHelp),
-	handleInput: data => {
-		if (data === "i") open();
-		if (data === "q" || matchesKey(data, "ctrl+c")) stop();
-	},
-	invalidate() {},
-};
-tui.addChild(title);
-tui.addChild(work);
-tui.addChild(result);
-tui.addChild(indicator);
-tui.addChild(home);
-tui.setFocus(home);
-let steps = 0;
+let home!: UiNode;
+const surface = createSurface(() => ({
+	main: [
+		new UiNode("text", { text: "Async Ask acceptance fixture — synthetic data; no model calls" }),
+		new UiNode("text", { text: () => `Independent work steps: ${steps()}` }),
+		new UiNode("text", { text: result }),
+	],
+	dock: [
+		QuestionIndicator(actions, open),
+		home = new UiNode("text", { text: "i opens Questions; q quits. Work continues while forms are open.",
+			onKey: (key: { id: string }) => {
+				if (key.id === "i") { open(); return true; }
+				if (key.id === "q" || key.id === "ctrl+c") { void stop(); return true; }
+				return false;
+			},
+		}),
+	],
+	layer,
+}));
+surface.focus(home);
+host = await startHost({ surface, theme: currentTheme, title: "Async Ask acceptance" });
 const timer = setInterval(() => {
-	work.setText(`Independent work steps: ${++steps}`);
-	// The host may finish work while questions remain unanswered.
-	if (steps === 4) writeTerminalSequence("\x1b]7501;state=done:app=omp\x1b\\");
+	steps.update(n => n + 1);
+	if (steps() === 4) writeTerminalSequence("\x1b]7501;state=done:app=omp\x1b\\");
 	for (const payload of queued.splice(0)) {
-		if (typeof payload === "string" || !isRecord(payload.details) || typeof payload.details.requestId !== "string")
-			continue;
+		if (typeof payload === "string" || !isRecord(payload.details) || typeof payload.details.requestId !== "string") continue;
 		const question = store.get(payload.details.requestId);
 		if (!question?.answer || question.answer.id !== payload.details.answerId) continue;
-		log.entries.push({
-			...recordedEntry("fixture", question.id, question.answer.id),
-			parentId: log.entries.at(-1)?.id ?? null,
-		});
+		log.entries.push({ ...recordedEntry("fixture", question.id, question.answer.id), parentId: log.entries.at(-1)?.id ?? null });
 		delivery.settle();
-		result.setText(`Recorded answer: ${JSON.stringify(question.answer.data)} at independent work step ${steps}`);
+		result.set(`Recorded answer: ${JSON.stringify(question.answer.data)} at step ${steps()}`);
 	}
-	tui.requestRender();
 }, 500);
-function stop(): void {
+async function stop(): Promise<void> {
 	clearInterval(timer);
 	delivery.dispose();
 	attention.dispose();
-	writeTerminalSequence("\x1b]7501;state=clear\x1b\\");
 	inbox?.dispose();
-	indicator.dispose();
-	tui.stop();
-	process.exit(0);
+	writeTerminalSequence("\x1b]7501;state=clear\x1b\\");
+	await host?.stop();
+	surface.dispose();
 }
-process.once("SIGTERM", stop);
-tui.terminal.onProgramStatusSupport?.(supported => {
-	result.setText(`OSC 7501 supported: ${supported}. No user answer has been submitted.`);
-});
-tui.start();
-tui.terminal.setTitle("\u{f04fe} GOAL: Async Ask tab attention acceptance");
+process.once("SIGTERM", () => void stop());
 writeTerminalSequence("\x1b]7501;state=working:app=omp\x1b\\");

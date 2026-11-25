@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
+import type { ExtensionAPI, ExtensionContext, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
+import { nativeRendering, onCleanup, UiNode } from "@oh-my-pi/pi-tui";
 import { isRecord, logger, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
 import { AVAILABLE, createQuestionSource, serveQuestionSources, type OwnedQuestionSource } from "./bridge";
@@ -27,6 +27,7 @@ interface Connection {
 	source?: OwnedQuestionSource;
 	overlay?: AbortController;
 	panel?: QuestionPanel;
+	panelRequested?: boolean;
 }
 function supported(ctx: ExtensionContext): boolean {
 	return ctx.mode === "tui" && ctx.hasUI && ctx.agent.kind === "main";
@@ -53,6 +54,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		previous.delivery.dispose();
 		previous.attention.dispose();
 		previous.overlay?.abort();
+		previous.panel?.dispose();
 		previous.ctx.ui.setWidget(WIDGET, undefined);
 	}
 	function actions(owner: Connection, close: () => void): InboxActions {
@@ -64,6 +66,22 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 			retry: id => owner.delivery.retry(id),
 			close,
 		};
+	}
+	function mountPanel(owner: Connection, ui: ExtensionUiHost): UiNode {
+		if (connection !== owner) return new UiNode("col", {});
+		owner.panel?.dispose();
+		const panel = new QuestionPanel(actions(owner, () => {}), ui, owner.ctx.cwd,
+			owner.ctx.ui.composer ? handler => owner.ctx.ui.composer!.addKeyHandler(handler) : undefined);
+		owner.panel = panel;
+		onCleanup(() => {
+			panel.dispose();
+			if (owner.panel === panel) owner.panel = undefined;
+		});
+		if (owner.panelRequested) {
+			owner.panelRequested = false;
+			panel.open();
+		}
+		return panel.view();
 	}
 	function ensure(ctx: ExtensionContext): Connection {
 		if (!supported(ctx))
@@ -104,25 +122,19 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		let widgetVisible = false;
 		const syncWidget = () => {
 			// Native history and drafts live with the session, not the pending count.
-			if (owner.panel) return;
+			if (owner.panel || owner.panelRequested) return;
 			const pending = store.list().some(question => question.status === "pending");
 			if (pending === widgetVisible) return;
 			widgetVisible = pending;
 			ctx.ui.setWidget(
 				WIDGET,
 				pending
-					? tui => {
-							if (tui.nativeRendering) {
-								return owner.panel = new QuestionPanel(actions(owner, () => {}), tui, ctx.cwd);
-							}
-							return new QuestionIndicator(
-								actions(owner, () => {}),
-								() => {
-									if (connection !== owner) return;
-									void open(ctx).catch(error => ctx.ui.notify(String(error), "error"));
-								},
-								tui,
-							);
+					? ui => {
+							if (nativeRendering()) return mountPanel(owner, ui);
+							return QuestionIndicator(actions(owner, () => {}), () => {
+								if (connection !== owner) return;
+								void open(ctx).catch(error => ctx.ui.notify(String(error), "error"));
+							});
 						}
 					: undefined,
 			);
@@ -135,11 +147,12 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const owner = ensure(ctx);
 		if (owner.overlay) return;
 		owner.delivery.settle();
-		if (isNativeRendering()) {
-			if (!owner.panel) {
-				ctx.ui.setWidget(WIDGET, tui => owner.panel = new QuestionPanel(actions(owner, () => {}), tui, ctx.cwd));
+		if (nativeRendering()) {
+			if (owner.panel) owner.panel.open();
+			else {
+				owner.panelRequested = true;
+				ctx.ui.setWidget(WIDGET, ui => mountPanel(owner, ui));
 			}
-			owner.panel?.open();
 			return;
 		}
 		const abort = new AbortController();
@@ -153,9 +166,9 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 						tui,
 						ctx.cwd,
 					);
-					return inbox;
+					return inbox.view();
 				},
-				{ overlay: true, overlayOptions: { width: "90%", maxHeight: "90%" }, signal: abort.signal },
+				{ overlay: true, signal: abort.signal },
 			);
 		} catch (error) {
 			if (!abort.signal.aborted) throw error;
@@ -183,7 +196,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		if (!summary) return undefined;
 		const raw = typeof message.content === "string"
 			? message.content : message.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
-		return new AnswerCard(summary, options.expanded, raw);
+		return AnswerCard(summary, options.expanded, raw);
 	});
 	pi.registerTool<typeof parameters>({
 		name: "ask_async",
@@ -195,7 +208,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		...questionRenderers(id => {
 			const owner = connection;
 			if (owner && (!id || owner.store.get(id))) void open(owner.ctx);
-		}, id => connection?.store.get(id)),
+		}, id => connection?.store.get(id), listener => connection?.store.subscribe(listener)),
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			try {
 				signal?.throwIfAborted();

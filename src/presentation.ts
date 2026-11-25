@@ -1,11 +1,9 @@
-import { Text, type Component } from "@oh-my-pi/pi-tui";
-import { parseHtmlForm, spansText } from "@oh-my-pi/pi-tui/html-form/parse";
-import { col, node, row, text } from "@oh-my-pi/pi-tui/native/describe";
-import type { DescribeContext, NativeNode, NativeUiEvent } from "@oh-my-pi/pi-tui/native/node";
-import type { NativeToolView, RenderResultOptions, ToolRenderResult } from "@oh-my-pi/pi-tui/tools/renderer";
+import type { ToolDefinition } from "@oh-my-pi/pi-coding-agent";
+import { parseHtmlForm, spansText } from "@oh-my-pi/pi-coding-agent/tools/html-form/parse";
+import { onCleanup, signal, UiNode } from "@oh-my-pi/pi-tui";
 import { isRecord, sanitizeText } from "@oh-my-pi/pi-utils";
 import type { Question } from "./state";
-import { applyQuestionStyles, questionBlock, questionStatus } from "./ui";
+import { questionBlock, questionStatus } from "./ui";
 
 function clean(value: string): string {
 	return sanitizeText(value).replaceAll("\t", "    ");
@@ -51,69 +49,19 @@ export function savedAnswerPresentation(details: unknown): AnswerPresentation | 
 	return { title: clean(title), rows: rows.map(clean) };
 }
 
-export class AnswerCard implements Component {
-	#styled = false;
-	constructor(readonly summary: AnswerPresentation, private expanded: boolean, readonly raw: string) {}
-	render(width: number): readonly string[] {
-		return new Text([
-			`Answer submitted · ${this.summary.title}`, ...this.summary.rows,
-			...(this.expanded ? [clean(this.raw)] : []),
-		].join("\n"), 0, 0).render(width);
-	}
-	describe(context: DescribeContext): NativeNode {
-		if (!this.#styled) this.#styled = applyQuestionStyles(context);
-		return questionBlock(context, {
-			role: "async-ask.answer",
-			title: "Answer submitted",
-			target: this.summary.title,
-			status: "done",
-			collapsed: !this.expanded,
-			preview: "children",
-		}, [
-			node("section", {}, this.summary.rows.map(answer => row([
-				node("icon", { name: "check", tone: "success" }),
-				text(answer, { wrap: "word" }),
-			], { gap: "sm", align: "baseline", role: "omp.tool.answer" }))),
-			...(this.expanded ? [node("code", { text: clean(this.raw), lang: "text" })] : []),
-		]);
-	}
-	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type === "toggle" && event.key === "") this.expanded = !event.collapsed;
-	}
-	invalidate(): void {}
+export function AnswerCard(summary: AnswerPresentation, expanded: boolean, raw: string): UiNode {
+	const open = signal(expanded);
+	return new UiNode("col", { children: () => questionBlock({
+		role: "async-ask.answer", title: "Answer submitted", target: summary.title,
+		status: "done", collapsed: !open(), preview: { lines: 8 },
+	}, [
+		new UiNode("section", { children: summary.rows.map(answer => questionStatus(answer, "success")) }),
+		...(open() ? [new UiNode("code", { text: clean(raw), lang: "text" })] : []),
+	], undefined, collapsed => open.set(!collapsed)) });
 }
 
-/** A component boundary keeps receipt state live and routes its button independently of the tool card. */
-class OpenQuestions implements Component {
-	#styled = false;
-	constructor(readonly open: () => void, readonly receipt: () => Receipt) {}
-	render(): string[] {
-		const view = this.receipt();
-		return [view.status, ...view.rows, ...(!view.error ? ["Open questions: /questions"] : [])];
-	}
-	describe(context: DescribeContext): NativeNode {
-		if (!this.#styled) this.#styled = applyQuestionStyles(context);
-		const view = this.receipt();
-		return col([
-			...(view.rows.length ? [node("section", {}, view.rows.map(value => text(value, { wrap: "word" })))] : []),
-			row([
-				questionStatus(view.status, view.tone, view.icon),
-				...(!view.error ? [node("button", {
-					role: "omp.btn",
-					text: "Open questions",
-					icon: "inbox",
-					variant: "quiet",
-					size: "sm",
-					actions: { click: "open" },
-				})] : []),
-			], { gap: "sm", justify: "between", wrap: true, role: "async-ask.receipt.footer" }),
-		], { gap: "sm", role: "async-ask.receipt" });
-	}
-	handleNativeEvent(event: NativeUiEvent): void {
-		if (event.type === "action" && event.act === "open") this.open();
-	}
-	invalidate(): void {}
-}
+type ToolRenderResult = Parameters<NonNullable<ToolDefinition["renderResult"]>>[0] & { isError?: boolean };
+type RenderResultOptions = Parameters<NonNullable<ToolDefinition["renderResult"]>>[1];
 
 interface ToolArgs { op?: string; title?: string; blockedWork?: string }
 
@@ -134,7 +82,7 @@ function title(args: ToolArgs): string {
 function receipt(result: ToolRenderResult, args: ToolArgs, current?: Question): Receipt {
 	const details = isRecord(result.details) ? result.details : {};
 	const heading = typeof details.title === "string" ? clean(details.title) : title(args);
-	if (result.isError) return { title: heading, status: "Could not update questions", tone: "error", error: true, rows: result.content.flatMap(part => part.text ? [clean(part.text)] : []) };
+	if (result.isError) return { title: heading, status: "Could not update questions", tone: "error", error: true, rows: result.content.flatMap(part => part.type === "text" ? [clean(part.text)] : []) };
 	if (Array.isArray(details.questions)) {
 		return {
 			title: heading, status: `${details.questions.length} questions`,
@@ -161,32 +109,37 @@ function receipt(result: ToolRenderResult, args: ToolArgs, current?: Question): 
 	};
 }
 
-export function questionRenderers(open: (id?: string) => void, lookup?: (id: string) => Question | undefined) {
+export function questionRenderers(
+	open: (id?: string) => void,
+	lookup?: (id: string) => Question | undefined,
+	subscribe?: (listener: () => void) => (() => void) | undefined,
+) {
 	return {
-		renderCall(args: ToolArgs) { return new Text(`Ask asynchronously · ${title(args)}`, 0, 0); },
+		renderCall(args: ToolArgs) {
+			return new UiNode("text", { text: `Ask asynchronously · ${title(args)}` });
+		},
 		renderResult(result: ToolRenderResult, options: RenderResultOptions, _theme: unknown, args: ToolArgs = {}) {
-			const view = receipt(result, args);
-			return new Text([view.status, ...view.rows, ...(!result.isError ? ["/questions"] : []),
-				...(options.expanded ? result.content.flatMap(part => part.text ? [clean(part.text)] : []) : []),
-			].join("\n"), 0, 0);
-		},
-		describeCall(args: ToolArgs): NativeToolView {
-			return { tool: { title: "Ask asynchronously", target: title(args), targetKind: "text" }, inline: false };
-		},
-		describeResult(result: ToolRenderResult, options: RenderResultOptions, args: ToolArgs = {}): NativeToolView {
-			const view = receipt(result, args);
-			return {
-				tool: { target: view.title, targetKind: "text" },
-				inline: false,
-				body: [
-					new OpenQuestions(
-						() => open(view.id),
-						() => receipt(result, args, view.id ? lookup?.(view.id) : undefined),
-					),
-					...(options.expanded ? [node("code", { text: clean(result.content.flatMap(part => part.text ? [part.text] : []).join("\n")), lang: "text" })] : []),
-				],
-				preview: "children",
-			};
+			const revision = signal(0);
+			const off = subscribe?.(() => revision.update(n => n + 1));
+			if (off) onCleanup(off);
+			const initial = receipt(result, args);
+			return new UiNode("col", { role: "async-ask.receipt", gap: "sm", children: () => {
+				revision();
+				const view = receipt(result, args, initial.id ? lookup?.(initial.id) : undefined);
+				return [
+					...view.rows.map(value => new UiNode("text", { text: value, wrap: "word" })),
+					new UiNode("row", { gap: "sm", justify: "between", children: [
+						questionStatus(view.status, view.tone, view.icon),
+						...(!view.error ? [new UiNode("button", {
+							role: "omp.btn", text: "Open questions", icon: "inbox", actions: { click: "open" },
+							onAction: () => open(view.id),
+						})] : []),
+					] }),
+					...(options.expanded ? [new UiNode("code", {
+						text: clean(result.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n")), lang: "text",
+					})] : []),
+				];
+			} });
 		},
 	};
 }

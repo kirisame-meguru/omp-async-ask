@@ -1,341 +1,182 @@
-import { beforeAll, expect, test } from "bun:test";
-import { Text } from "@oh-my-pi/pi-tui";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { TspNode } from "@oh-my-pi/pi-wire";
+import { afterEach, expect, test } from "bun:test";
+import type { KeyEvent, UiNode } from "@oh-my-pi/pi-tui";
 import { QuestionPanel } from "../src/panel";
 import { QuestionStore } from "../src/state";
 import { input, journal } from "./helpers";
-import { TspHarness } from "./tsp-harness";
+import { UiHarness } from "./ui-harness";
 
-beforeAll(() => initTheme(false));
-
-async function fixture(
-	html = '<form><fieldset><legend>Choose a format</legend><label><input type="radio" name="format" value="pdf">PDF</label><label><input type="radio" name="format" value="markdown">Markdown</label></fieldset></form>',
-) {
+const harnesses: UiHarness[] = [];
+afterEach(() => { for (const harness of harnesses.splice(0)) harness.dispose(); });
+const key = (id: string, text?: string): KeyEvent => ({ id, text, kind: "press", raw: text ?? "" });
+function fixture(html = '<form><fieldset><legend>Format</legend><label><input type="radio" name="format" value="pdf">PDF</label><label><input type="radio" name="format" value="markdown">Markdown</label></fieldset></form>') {
 	const store = new QuestionStore("fixture", journal().append);
 	const first = store.create({ ...input, html }, "first");
-	const second = store.create({ ...input, html, title: "Second question" }, "second");
-	const home = new Text("Composer", 0, 0);
+	const second = store.create({ ...input, html, title: "Second" }, "second");
 	let panel!: QuestionPanel;
-	const harness = await TspHarness.start((tui) => {
-		panel = new QuestionPanel(
-			{
-				questions: () => store.list(),
-				errors: () => store.errors,
-				subscribe: (fn) => store.subscribe(fn),
-				submit: (id, data, notes) => {
-					store.submit(id, data, notes);
-				},
-				retry: (id) => store.setDelivery(id, "queued"),
-				close: () => {},
-			},
-			tui,
-		);
-		tui.addChild(panel);
-		tui.addChild(home);
-		tui.setFocus(home);
+	let handler: ((key: KeyEvent) => boolean) | undefined;
+	const harness = new UiHarness(host => {
+		panel = new QuestionPanel({
+			questions: () => store.list(), errors: () => store.errors, subscribe: listener => store.subscribe(listener),
+			submit: (id, data, notes) => { store.submit(id, data, notes); }, retry: id => store.setDelivery(id, "queued"), close: () => {},
+		}, host, ".", callback => { handler = callback; return () => { handler = undefined; }; });
+		return panel.view();
 	});
-	const questionNodes = (id: string): TspNode[] => {
-		const card = harness.find((n) => n.p?.role === "async-ask.question" && n.id.endsWith(`/${id}`));
-		expect(card).toBeDefined();
-		const nodes: TspNode[] = [];
-		const visit = (n: TspNode) => {
-			nodes.push(n);
-			n.c?.forEach(visit);
-		};
-		visit(card!);
-		return nodes;
+	harnesses.push(harness);
+	const nodes = (id: string) => {
+		const root = harness.find(node => node.key() === id);
+		const result: UiNode[] = [];
+		const visit = (node: UiNode) => { result.push(node); node.children().forEach(visit); };
+		visit(root);
+		return result;
 	};
-	const action = (node: TspNode, act: string) =>
-		harness.event({ ev: "action", sf: harness.terminal.surface!, id: node.id, act, mods: [] });
-	const toggle = () => {
-		const card = harness.find((n) => n.p?.role === "async-ask.panel")!;
-		if (!card.p || !("collapsed" in card.p)) throw new Error("Expected a disclosure panel");
-		harness.event({ ev: "toggle", sf: harness.terminal.surface!, id: card.id, collapsed: !card.p?.collapsed });
-	};
-	const select = (id: string, item: string) => {
-		const list = questionNodes(id).find((n) => n.k === "list")!;
-		harness.event({ ev: "select", sf: harness.terminal.surface!, id: list.id, item });
-	};
-	const submit = (id: string) =>
-		action(questionNodes(id).find((n) => n.k === "button" && n.p?.actions?.click === "submit")!, "submit");
-	const tab = (item: string) =>
-		harness.event({ ev: "select", sf: harness.terminal.surface!, id: harness.find((n) => n.k === "tabs")!.id, item });
-	return {
-		store,
-		first,
-		second,
-		panel,
-		home,
-		harness,
-		action,
-		toggle,
-		select,
-		submit,
-		tab,
-		questionNodes,
-		stop: () => {
-			panel.dispose();
-			harness.stop();
-		},
-	};
+	const select = (id: string, item: string) => harness.event(nodes(id).find(n => n.kind === "list")!, { type: "select", key: "", item });
+	const submit = (id: string) => panel.form(id)!.model.submit();
+	return { store, first, second, panel, harness, nodes, select, submit, key: (event: KeyEvent) => handler?.(event) };
 }
 
-test("closed panel reserves gauge clearance and opens inline without an overlay", async () => {
-	const fx = await fixture();
-	try {
-		expect(fx.harness.find((n) => n.k === "tabs")).toBeUndefined();
-		expect(fx.harness.find((n) => n.p?.role === "async-ask.clearance")?.p).toMatchObject({ min: { h: "1lines" } });
-		fx.toggle();
-		expect(fx.harness.find((n) => n.k === "overlay")).toBeUndefined();
-		expect(fx.harness.find((n) => n.k === "tabs")?.p).toMatchObject({ active: "pending" });
-		expect(fx.harness.findAll((n) => n.p?.role === "async-ask.question")).toHaveLength(2);
-		expect(fx.harness.tui.getFocused()).toBe(fx.home);
-		expect(fx.harness.errors).toEqual([]);
-	} finally {
-		fx.stop();
-	}
+test("panel opens inline without overlay or automatic key ownership and reserves clearance", () => {
+	const fx = fixture();
+	expect(fx.harness.findAll(n => n.kind === "tabs")).toEqual([]);
+	expect(fx.harness.find(n => n.props().role === "async-ask.clearance").props()).toMatchObject({ min: { h: "1lines" } });
+	const card = fx.harness.find(n => n.props().role === "async-ask.panel");
+	fx.harness.event(card, { type: "toggle", key: "", collapsed: false });
+	expect(fx.harness.findAll(n => n.kind === "overlay")).toEqual([]);
+	expect(fx.harness.findAll(n => n.props().role === "async-ask.question")).toHaveLength(2);
+	expect(fx.key(key("a", "a"))).toBe(false);
+	expect(fx.panel.form(fx.first.id)!.model.focused()).toBe(false);
+	expect(fx.harness.findAll(n => n.kind === "elapsed")).toHaveLength(2);
+	expect(fx.nodes(fx.first.id).some(n => n.kind === "list")).toBe(true);
 });
 
-test("each form has one question block, no redundant Ask chrome, and vertical options", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		const nodes = fx.harness.findAll(() => true);
-		expect(nodes.filter((n) => n.p?.role === "async-ask.question")).toHaveLength(2);
-		expect(nodes.some((n) => n.p?.role === "omp.ask.card.head")).toBe(false);
-		for (const id of [fx.first.id, fx.second.id]) {
-			const lists = fx.questionNodes(id).filter((n) => n.k === "list");
-			expect(lists).toHaveLength(1);
-			expect(lists[0]!.c).toHaveLength(3);
-		}
-		expect(nodes.filter((n) => n.k === "elapsed")).toHaveLength(2);
-		expect(nodes.some((n) => n.k === "button" && n.p?.text === "Close")).toBe(false);
-		expect(nodes.some((n) => n.k === "text" && /Depends on this|Agent work continues/.test(n.p?.text ?? ""))).toBe(
-			false,
-		);
-	} finally {
-		fx.stop();
-	}
+test("second form submits independently without losing first draft", () => {
+	const fx = fixture();
+	fx.panel.open();
+	fx.select(fx.first.id, "o0");
+	fx.select(fx.second.id, "o1");
+	fx.submit(fx.second.id);
+	expect(fx.store.get(fx.second.id)?.answer?.data).toEqual({ format: "markdown" });
+	expect(fx.store.get(fx.first.id)?.status).toBe("pending");
+	fx.submit(fx.first.id);
+	expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ format: "pdf" });
+	fx.panel.open();
+	expect(fx.harness.findAll(n => n.props().role === "async-ask.question")).toHaveLength(2);
 });
 
-test("second form submits independently and retains the first form's draft", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.select(fx.first.id, "o0");
-		fx.select(fx.second.id, "o1");
-		fx.submit(fx.second.id);
-		expect(fx.store.get(fx.second.id)?.answer?.data).toEqual({ format: "markdown" });
-		expect(fx.store.get(fx.first.id)?.status).toBe("pending");
-		fx.submit(fx.first.id);
-		expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ format: "pdf" });
-		fx.panel.open();
-		fx.harness.flush();
-		fx.tab("answered");
-		expect(fx.harness.findAll((n) => n.p?.role === "async-ask.question")).toHaveLength(2);
-	} finally {
-		fx.stop();
-	}
+test("claim forwards keys; Escape, collapse, tabs, submission and disposal release ownership", () => {
+	const fx = fixture('<form><label>Destination<input name="target"></label></form>');
+	fx.panel.open();
+	fx.panel.claim(fx.first.id);
+	expect(fx.key(key("a", "a"))).toBe(true);
+	expect(fx.panel.form(fx.first.id)!.model.data()).toEqual({ target: "a" });
+	expect(fx.key(key("escape"))).toBe(true);
+	expect(fx.key(key("b", "b"))).toBe(false);
+	fx.panel.claim(fx.first.id);
+	fx.panel.collapse();
+	expect(fx.key(key("b", "b"))).toBe(false);
+	fx.panel.open();
+	fx.panel.claim(fx.first.id);
+	fx.panel.switchTab("answered");
+	expect(fx.key(key("b", "b"))).toBe(false);
+	fx.panel.switchTab("pending");
+	fx.panel.claim(fx.first.id);
+	fx.submit(fx.first.id);
+	expect(fx.key(key("b", "b"))).toBe(false);
+	expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ target: "a" });
+	fx.panel.claim(fx.second.id);
+	fx.panel.dispose();
+	expect(fx.key(key("b", "b"))).toBeUndefined();
 });
 
-test("collapse and tab switches retain drafts and release keyboard focus", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.select(fx.first.id, "o1");
-		expect(fx.harness.tui.getFocused()).not.toBe(fx.home);
-		fx.toggle();
-		expect(fx.harness.tui.getFocused()).toBe(fx.home);
-		expect(fx.store.get(fx.first.id)?.status).toBe("pending");
-		fx.toggle();
-		fx.tab("answered");
-		fx.tab("pending");
-		fx.submit(fx.first.id);
-		expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ format: "markdown" });
-	} finally {
-		fx.stop();
-	}
+test("new questions do not steal claimed keys; stale and hidden forms cannot submit", () => {
+	const fx = fixture();
+	fx.panel.open();
+	fx.select(fx.second.id, "o1");
+	const first = fx.panel.form(fx.first.id)!;
+	const second = fx.panel.form(fx.second.id)!;
+	fx.store.create({ ...input, title: "Third" }, "third");
+	expect(second.model.focused()).toBe(true);
+	fx.store.withdraw(fx.first.id, "Resolved");
+	first.model.submit();
+	expect(fx.store.get(fx.first.id)?.status).toBe("withdrawn");
+	fx.panel.collapse();
+	second.model.submit();
+	expect(fx.store.get(fx.second.id)?.status).toBe("pending");
+	fx.panel.open();
+	fx.panel.switchTab("answered");
+	second.model.submit();
+	expect(fx.store.get(fx.second.id)?.status).toBe("pending");
+	fx.panel.switchTab("pending");
+	fx.submit(fx.second.id);
+	expect(fx.store.get(fx.second.id)?.answer?.data).toEqual({ format: "markdown" });
 });
 
-test("new questions never steal focus and withdrawn forms reject stale events", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.select(fx.second.id, "o1");
-		const focused = fx.harness.tui.getFocused();
-		const stale = fx.questionNodes(fx.first.id).find((n) => n.k === "button" && n.p?.actions?.click === "submit")!;
-		fx.store.create({ ...input, title: "Third" }, "third");
-		fx.harness.flush();
-		expect(fx.harness.tui.getFocused()).toBe(focused);
-		fx.store.withdraw(fx.first.id, "Resolved independently");
-		fx.harness.flush();
-		fx.action(stale, "submit");
-		expect(fx.store.get(fx.first.id)?.status).toBe("withdrawn");
-		fx.submit(fx.second.id);
-		expect(fx.store.get(fx.second.id)?.answer?.data).toEqual({ format: "markdown" });
-	} finally {
-		fx.stop();
-	}
+test("Other and option notes stay with their own forms", () => {
+	const fx = fixture();
+	fx.panel.open();
+	fx.select(fx.second.id, "other");
+	fx.panel.form(fx.second.id)!.model.paste("Text export");
+	fx.submit(fx.second.id);
+	expect(fx.store.get(fx.second.id)?.answer?.data).toEqual({ format: "Text export" });
+	fx.select(fx.first.id, "o0");
+	const model = fx.panel.form(fx.first.id)!.model;
+	model.startNote();
+	model.paste("Keep formatting");
+	model.saveNote();
+	fx.submit(fx.first.id);
+	expect(fx.store.get(fx.first.id)?.answer?.notes[0]?.text).toBe("Keep formatting");
 });
 
-test("Other input and notes stay attached to their own form", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.select(fx.second.id, "other");
-		fx.harness.terminal.send("Text export");
-		fx.harness.flush();
-		fx.submit(fx.second.id);
-		expect(fx.store.get(fx.second.id)?.answer?.data).toEqual({ format: "Text export" });
-		fx.select(fx.first.id, "o0");
-		fx.action(fx.questionNodes(fx.first.id).find((n) => n.k === "button" && n.p?.actions?.click === "note")!, "note");
-		fx.harness.terminal.send("Keep formatting");
-		fx.harness.flush();
-		fx.action(fx.harness.find((n) => n.k === "button" && n.p?.actions?.click === "save-note")!, "save-note");
-		fx.submit(fx.first.id);
-		expect(fx.store.get(fx.first.id)?.answer?.notes[0]?.text).toBe("Keep formatting");
-	} finally {
-		fx.stop();
-	}
+test("skip retains defaults and drafts, includes later arrivals and starts a fresh pass on reopen", () => {
+	const fx = fixture();
+	fx.panel.open();
+	fx.select(fx.first.id, "o1");
+	const later = fx.store.create({ ...input, title: "Later" }, "later");
+	fx.panel.form(fx.first.id)!.model.cancel();
+	fx.panel.form(fx.second.id)!.model.cancel();
+	expect(fx.harness.findAll(n => n.kind === "tabs")).toHaveLength(1);
+	fx.panel.form(later.id)!.model.cancel();
+	expect(fx.harness.findAll(n => n.kind === "tabs")).toEqual([]);
+	expect(fx.store.list().every(q => q.status === "pending")).toBe(true);
+	fx.panel.open();
+	fx.panel.form(fx.first.id)!.model.cancel();
+	expect(fx.harness.findAll(n => n.kind === "tabs")).toHaveLength(1);
+	fx.submit(fx.first.id);
+	expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ format: "markdown" });
 });
 
-test("skipping never submits defaults and disposal returns focus", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.select(fx.first.id, "o0");
-		fx.action(
-			fx.questionNodes(fx.first.id).find((n) => n.k === "button" && n.p?.actions?.click === "cancel")!,
-			"cancel",
-		);
-		expect(fx.store.list().every((q) => q.status === "pending")).toBe(true);
-		fx.panel.dispose();
-		expect(fx.harness.tui.getFocused()).toBe(fx.home);
-	} finally {
-		fx.stop();
-	}
+test("pointer edits retain values across collapse and resize recomputes height bound", () => {
+	const fx = fixture('<form><label>Destination<input name="target" required></label></form>');
+	fx.panel.open();
+	const field = fx.nodes(fx.first.id).find(n => n.kind === "input")!;
+	fx.harness.event(field, { type: "edit", key: "", from: 0, to: 0, text: "staging", cursor: 7, len: 0 });
+	fx.panel.collapse();
+	fx.panel.open();
+	expect(fx.harness.find(n => n.props().role === "async-ask.body").props()).toMatchObject({ max: { h: "15lines" } });
+	fx.harness.resize(12);
+	expect(fx.harness.find(n => n.props().role === "async-ask.body").props()).toMatchObject({ max: { h: "6lines" } });
+	fx.submit(fx.first.id);
+	expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ target: "staging" });
 });
 
-test("pointer-focused text inputs return to the composer on collapse and submission", async () => {
-	const fx = await fixture('<form><label>Destination<input name="target" required></label></form>');
-	try {
-		fx.toggle();
-		const inputNode = fx.questionNodes(fx.first.id).find((n) => n.k === "input")!;
-		fx.harness.event({ ev: "focus", sf: fx.harness.terminal.surface!, id: inputNode.id });
-		fx.harness.event({
-			ev: "edit",
-			sf: fx.harness.terminal.surface!,
-			id: inputNode.id,
-			from: 0,
-			to: 0,
-			text: "staging",
-			cursor: 7,
-			len: 0,
-		});
-		fx.toggle();
-		expect(fx.harness.tui.getFocused()).toBe(fx.home);
-		fx.toggle();
-		const restored = fx.questionNodes(fx.first.id).find((n) => n.k === "input")!;
-		fx.harness.event({ ev: "focus", sf: fx.harness.terminal.surface!, id: restored.id });
-		fx.submit(fx.first.id);
-		expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ target: "staging" });
-		expect(fx.harness.tui.getFocused()).toBe(fx.home);
-	} finally {
-		fx.stop();
-	}
-});
-
-test("forms arriving after expansion remain reachable when earlier questions are skipped", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.store.create({ ...input, title: "Later question" }, "later");
-		fx.harness.flush();
-		for (const id of [fx.first.id, fx.second.id]) {
-			fx.action(fx.questionNodes(id).find((n) => n.k === "button" && n.p?.actions?.click === "cancel")!, "cancel");
-		}
-		expect(fx.harness.find((n) => n.k === "tabs")).toBeDefined();
-		expect(fx.store.list().every((q) => q.status === "pending")).toBe(true);
-	} finally {
-		fx.stop();
-	}
-});
-
-test("resizing recomputes the native question body's height bound", async () => {
-	const fx = await fixture();
-	const terminal = fx.harness.terminal;
-	try {
-		fx.toggle();
-		expect(fx.harness.find((n) => n.p?.role === "async-ask.body")?.p).toMatchObject({ max: { h: "15lines" } });
-		Object.defineProperty(terminal, "rows", { configurable: true, value: 12 });
-		await fx.harness.render();
-		expect(fx.harness.find((n) => n.p?.role === "async-ask.body")?.p).toMatchObject({ max: { h: "6lines" } });
-	} finally {
-		Reflect.deleteProperty(terminal, "rows");
-		fx.stop();
-	}
-});
-
-test("send failures stay visible and retry requires explicit confirmation", async () => {
-	const fx = await fixture();
+test("last-answer send failure remains visible; retry requires explicit confirmation", () => {
+	const fx = fixture();
+	fx.store.withdraw(fx.second.id, "Resolved");
 	const submit = fx.panel.actions.submit;
 	fx.panel.actions.submit = (id, data, notes) => {
 		submit(id, data, notes);
 		fx.store.setDelivery(id, "failed");
 		throw new Error("Synthetic delivery failure");
 	};
-	try {
-		fx.toggle();
-		fx.select(fx.first.id, "o0");
-		fx.submit(fx.first.id);
-		expect(fx.harness.find((n) => n.k === "tabs")?.p).toMatchObject({ active: "answered" });
-		expect(JSON.stringify(fx.harness.doc())).toContain("Synthetic delivery failure");
-		const retry = fx
-			.questionNodes(fx.first.id)
-			.find((n) => n.k === "button" && n.p?.actions?.click?.startsWith("retry:"))!;
-		fx.action(retry, `retry:${fx.first.id}`);
-		expect(fx.store.get(fx.first.id)?.delivery).toBe("failed");
-		fx.action(fx.harness.find((n) => n.k === "button" && n.p?.actions?.click === "confirm")!, "confirm");
-		expect(fx.store.get(fx.first.id)?.delivery).toBe("queued");
-		expect(JSON.stringify(fx.harness.doc())).not.toContain("Synthetic delivery failure");
-	} finally {
-		fx.stop();
-	}
-});
-
-test("retained forms cannot submit while hidden, and defaults are never sent by collapse", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.select(fx.first.id, "o0");
-		const form = fx.harness.tui.getFocused()!;
-		fx.toggle();
-		form.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
-		fx.toggle();
-		fx.tab("answered");
-		form.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
-		expect(fx.store.get(fx.first.id)?.status).toBe("pending");
-	} finally {
-		fx.stop();
-	}
-});
-
-test("reopening starts a fresh skip pass without discarding drafts", async () => {
-	const fx = await fixture();
-	try {
-		fx.toggle();
-		fx.select(fx.first.id, "o1");
-		for (const id of [fx.first.id, fx.second.id]) {
-			fx.action(fx.questionNodes(id).find(n => n.k === "button" && n.p?.actions?.click === "cancel")!, "cancel");
-		}
-		expect(fx.harness.find(n => n.k === "tabs")).toBeUndefined();
-		fx.toggle();
-		fx.action(fx.questionNodes(fx.first.id).find(n => n.k === "button" && n.p?.actions?.click === "cancel")!, "cancel");
-		expect(fx.harness.find(n => n.k === "tabs")).toBeDefined();
-		fx.submit(fx.first.id);
-		expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ format: "markdown" });
-	} finally {
-		fx.stop();
-	}
+	fx.panel.open();
+	fx.select(fx.first.id, "o0");
+	fx.submit(fx.first.id);
+	expect(fx.harness.snapshot()).toContain("Synthetic delivery failure");
+	expect(fx.harness.find(n => n.kind === "tabs").props()).toMatchObject({ active: "answered" });
+	fx.panel.retry(fx.first.id);
+	expect(fx.store.get(fx.first.id)?.delivery).toBe("failed");
+	fx.panel.keep();
+	fx.panel.retry(fx.first.id);
+	fx.panel.confirm();
+	expect(fx.store.get(fx.first.id)?.delivery).toBe("queued");
+	expect(fx.harness.snapshot()).not.toContain("Synthetic delivery failure");
 });
