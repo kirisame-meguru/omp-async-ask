@@ -10,16 +10,22 @@ import type {
 	ExtensionUIContext,
 	ToolDefinition,
 } from "@oh-my-pi/pi-coding-agent";
-import { initTheme } from "@oh-my-pi/pi-tui/theme";
-import type { Component } from "@oh-my-pi/pi-tui";
+import { initTheme, theme } from "@oh-my-pi/pi-tui/theme";
+import type { Component, TUI } from "@oh-my-pi/pi-tui";
+import type { MessageRenderer } from "@oh-my-pi/pi-tui/chat/extension-types";
+import { CustomMessageComponent } from "@oh-my-pi/pi-tui/chat/custom-message";
+import { ToolExecutionComponent } from "@oh-my-pi/pi-tui/chat/tool-execution";
+import type { CustomMessage } from "@oh-my-pi/pi-tui/chat/messages";
+import { TspHarness } from "./tsp-harness";
 import * as terminal from "@oh-my-pi/pi-tui";
 import { logger } from "@oh-my-pi/pi-utils";
 import asyncAsk from "../src/index";
 import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { AVAILABLE, CONNECT, type AsyncQuestion, type QuestionSource } from "../src/bridge";
 import goalPolicy from "../src/prompts/goal-policy.md" with { type: "text" };
-import { EVENT_TYPE, type QuestionEvent } from "../src/state";
+import { ANSWER_TYPE, EVENT_TYPE, type QuestionEvent } from "../src/state";
 import { QuestionInbox } from "../src/ui";
+import { QuestionPanel } from "../src/panel";
 import { input, journal } from "./helpers";
 
 beforeAll(async () => {
@@ -31,11 +37,12 @@ afterEach(async () => {
 });
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
-function fixture() {
+function fixture(nativeHost?: TUI) {
 	const log = journal();
 	const handlers = new Map<string, Handler>();
 	const tools: ToolDefinition[] = [];
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
+	const renderers = new Map<string, MessageRenderer>();
 	const sent: unknown[] = [];
 	const active: string[] = [];
 	let sessionId = "a";
@@ -47,9 +54,11 @@ function fixture() {
 	let widget: (Component & { dispose?: () => void }) | undefined;
 	const ui = {
 		setWidget: (_key: string, content: Parameters<ExtensionUIContext["setWidget"]>[1]) => {
+			if (nativeHost && widget) nativeHost.removeChild(widget);
 			widget?.dispose?.();
 			widget =
-				typeof content === "function" ? content({ requestRender: () => {} } as never, {} as never) : undefined;
+				typeof content === "function" ? content(nativeHost ?? { requestRender: () => {} } as never, {} as never) : undefined;
+			if (nativeHost && widget) nativeHost.addChild(widget);
 		},
 		notify: () => {},
 		custom: (factory: Parameters<ExtensionUIContext["custom"]>[0], options?: { signal?: AbortSignal }) => {
@@ -83,6 +92,7 @@ function fixture() {
 		arktype,
 		logger,
 		registerTool: (tool: ToolDefinition) => tools.push(tool),
+		registerMessageRenderer: (type: string, renderer: MessageRenderer) => renderers.set(type, renderer),
 		registerCommand: (name: string, command: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) =>
 			commands.set(name, command),
 		on: (name: string, handler: Handler) => handlers.set(name, handler),
@@ -104,6 +114,7 @@ function fixture() {
 		log,
 		tools,
 		commands,
+		renderers,
 		sent,
 		active,
 		emit: (name: string, event: unknown = { type: name }) => handlers.get(name)?.(event, ctx),
@@ -168,7 +179,6 @@ test("policy appends before any question without mutating or accumulating on the
 			systemPrompt: base,
 		})) as BeforeAgentStartEventResult;
 		expect(result.systemPrompt).toEqual([...base, goalPolicy]);
-		expect(result.systemPrompt?.at(-1)).toStartWith("## Goal persistence and non-blocking questions\n\n");
 	}
 	expect(fx.log.entries).toEqual([]);
 });
@@ -296,6 +306,26 @@ test("Questions widget exists only while pending; the command still opens answer
 	expect(fx.widget()).toBeUndefined();
 });
 
+test("native command opens the same retained dock panel without creating a modal", async () => {
+	const harness = await TspHarness.start();
+	try {
+		const fx = fixture(harness.tui);
+		await fx.emit("session_start");
+		const created = await fx.tools[0]!.execute("one", { op: "create", ...input }, undefined, undefined, fx.ctx);
+		const widget = fx.widget();
+		expect(widget).toBeInstanceOf(QuestionPanel);
+		await fx.commands.get("questions")!.handler("", fx.ctx);
+		expect(fx.opened()).toBe(0);
+		expect(fx.widget()).toBe(widget);
+		await fx.tools[0]!.execute("withdraw", { op: "withdraw", id: arktype({ id: "string" }).assert(created.details).id, reason: "Resolved" }, undefined, undefined, fx.ctx);
+		expect(fx.widget()).toBe(widget);
+		await fx.emit("session_before_switch");
+		expect(fx.widget()).toBeUndefined();
+		widget?.handleNativeEvent?.({ type: "toggle", key: "panel", collapsed: true });
+		expect(fx.sent).toEqual([]);
+	} finally { harness.stop(); }
+});
+
 test("switch invalidates an open inbox and does not inherit its pending questions", async () => {
 	const fx = fixture();
 	await fx.emit("session_start");
@@ -345,8 +375,8 @@ test("pending questions own a native attention record until answered or withdraw
 	const writer = spyOn(terminal, "writeTerminalSequence").mockImplementation(data => {
 		reports.push(data);
 	});
-	const fx = fixture();
-	terminal.setNativeRendering(true);
+	const harness = await TspHarness.start();
+	const fx = fixture(harness.tui);
 	try {
 		await fx.emit("session_start");
 		expect(reports).toEqual([]);
@@ -361,20 +391,19 @@ test("pending questions own a native attention record until answered or withdraw
 		const firstId = arktype({ id: "string" }).assert(first.details).id;
 		await tool.execute("withdraw", { op: "withdraw", id: firstId, reason: "Resolved" }, undefined, undefined, fx.ctx);
 		expect(reports).toHaveLength(1);
-		const opening = fx.commands.get("questions")!.handler("", fx.ctx);
-		const inbox = fx.component();
-		if (!(inbox instanceof QuestionInbox)) throw new Error("Expected the real question inbox");
-		inbox.handleInput("staging");
-		inbox.debugChildren[0]!.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
-		// Use the native form's real action path, not a fabricated store transition.
+		await fx.commands.get("questions")!.handler("", fx.ctx);
+		await harness.render();
+		const form = harness.find(node => node.k === "input")!;
+		harness.event({ ev: "edit", sf: harness.terminal.surface!, id: form.id, from: 0, to: 0, text: "staging", cursor: 7, len: 0 });
+		const submit = harness.find(node => node.k === "button" && node.p?.actions?.click === "submit")!;
+		harness.event({ ev: "action", sf: harness.terminal.surface!, id: submit.id, act: "submit", mods: [] });
 		expect(fx.sent).toHaveLength(1);
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
-		// The final answer closes the real extension overlay without a shutdown event.
-		await opening;
+		expect(fx.opened()).toBe(0);
 		await fx.emit("session_shutdown");
 	} finally {
 		await fx.emit("session_shutdown");
-		terminal.setNativeRendering(false);
+		harness.stop();
 		writer.mockRestore();
 	}
 });
@@ -417,5 +446,101 @@ test("native attention follows rendering availability, restored questions and se
 		await fx.emit("session_shutdown");
 		terminal.setNativeRendering(false);
 		writer.mockRestore();
+	}
+});
+
+test("Tern question cards hide transport payloads and open the real inbox", async () => {
+	const harness = await TspHarness.start();
+	const fx = fixture(harness.tui);
+	await fx.emit("session_start");
+	const tool = fx.tools[0]!;
+	const args = { op: "create", ...input };
+	const result = await tool.execute("native-question", args, undefined, undefined, fx.ctx);
+	const card = new ToolExecutionComponent(tool.name, args, {}, tool as unknown as AgentTool, harness.tui);
+	card.setArgsComplete();
+	card.updateResult(result);
+	harness.tui.addChild(card);
+	await harness.render();
+	try {
+		const drawn = JSON.stringify(harness.doc());
+		expect(drawn).toContain(input.title);
+		expect(drawn).toContain("Awaiting answer");
+		expect(drawn).not.toContain("<form");
+		expect(drawn).not.toContain("No user answer has been given");
+		expect(drawn).not.toContain("blockedWork=");
+		const button = harness.find(node => node.k === "button" && node.p?.text === "Open questions");
+		expect(button).toBeDefined();
+		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
+		expect(fx.opened()).toBe(0);
+		expect(fx.widget()).toBeInstanceOf(QuestionPanel);
+		expect(harness.errors).toEqual([]);
+		let source: QuestionSource | undefined;
+		fx.events.emit(CONNECT, { version: 1, sessionId: "a", accept: (value: QuestionSource) => { source = value; } });
+		let pending: readonly AsyncQuestion[] = [];
+		source!.subscribe(value => { pending = value; });
+		pending[0]!.submitConfirmed({ target: "stage" });
+		harness.flush();
+		expect(JSON.stringify(harness.doc())).toContain("Answered");
+		expect(JSON.stringify(harness.doc())).not.toContain("Awaiting answer");
+		await fx.emit("session_before_switch");
+		fx.switchSession();
+		await fx.emit("session_switch");
+		harness.event({ ev: "action", sf: harness.terminal.surface!, id: button!.id, act: "open", mods: [] });
+		expect(fx.opened()).toBe(0);
+		expect(fx.widget()).toBeUndefined();
+	} finally {
+		harness.stop();
+	}
+});
+
+test("Tern answer cards show selected labels while preserving the full agent message", async () => {
+	const fx = fixture();
+	await fx.emit("session_start");
+	let source: QuestionSource | undefined;
+	fx.events.emit(CONNECT, { version: 1, sessionId: "a", accept: (value: QuestionSource) => { source = value; } });
+	const question = {
+		...input,
+		title: "Choose a destination",
+		html: '<form><fieldset><legend>Destination</legend><label><input type="radio" name="target" value="stage">Staging environment</label><label><input type="radio" name="target" value="prod">Production environment</label></fieldset><label>Notes<textarea name="notes"></textarea></label><label>Retries<input type="number" name="retries"></label></form>',
+	};
+	await fx.tools[0]!.execute("native-answer", { op: "create", ...question }, undefined, undefined, fx.ctx);
+	let pending: readonly AsyncQuestion[] = [];
+	source!.subscribe(value => { pending = value; });
+	pending[0]!.submitConfirmed({ target: "stage", notes: "", retries: 0 });
+	const message = { ...(fx.sent[0] as CustomMessage), role: "custom" as const, timestamp: 1 };
+	const original = JSON.stringify(message);
+	const harness = await TspHarness.start(tui => {
+		tui.addChild(new CustomMessageComponent(message, fx.renderers.get(ANSWER_TYPE)));
+	});
+	try {
+		const drawn = JSON.stringify(harness.doc());
+		expect(drawn).toContain("Answer submitted");
+		expect(drawn).toContain("Choose a destination");
+		expect(drawn).toContain("Staging environment");
+		expect(drawn).toContain("Retries: 0");
+		expect(drawn).not.toContain("<form");
+		expect(drawn).not.toContain("Question ID:");
+		expect(drawn).not.toContain("User-submitted form values");
+		expect(JSON.stringify(message)).toBe(original);
+		expect(message.content).toContain(question.html);
+		expect(message.content).toContain('"target": "stage"');
+		const card = harness.find(node => node.p?.role === "async-ask.answer");
+		expect(card).toBeDefined();
+		harness.event({ ev: "toggle", sf: harness.terminal.surface!, id: card!.id, collapsed: false });
+		expect(JSON.stringify(harness.doc())).toContain("Question ID:");
+		expect(harness.errors).toEqual([]);
+		// Existing sessions have only identity metadata; recover their labels from the owning journal.
+		const { presentation: _presentation, ...legacyDetails } = message.details as Record<string, unknown>;
+		const legacy = { ...message, details: legacyDetails };
+		const renderer = fx.renderers.get(ANSWER_TYPE)!;
+		expect(renderer(legacy, { expanded: false }, theme)?.render(100).join("\n")).toContain("Staging environment");
+		await fx.emit("session_before_switch");
+		fx.switchSession();
+		await fx.emit("session_switch");
+		expect(renderer(legacy, { expanded: false }, theme)).toBeUndefined();
+		// New messages are self-contained even when their session is no longer connected.
+		expect(renderer(message, { expanded: false }, theme)?.render(100).join("\n")).toContain("Staging environment");
+	} finally {
+		harness.stop();
 	}
 });

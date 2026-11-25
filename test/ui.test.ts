@@ -140,13 +140,13 @@ test("Tern opens the first form immediately, submits it and advances to the next
 		if (!submit) throw new Error("No native form Submit action");
 		expect(submit.p).toMatchObject({ text: "Send answer", variant: "primary" });
 		const skip = harness.find(node => node.k === "button" && node.p?.actions?.click === "cancel");
-		expect(skip?.p).toMatchObject({ text: "Skip for now", variant: "default" });
+		expect(skip?.p).toMatchObject({ text: "Skip for now", role: "omp.btn" });
 		harness.event({ ev: "action", sf: harness.terminal.surface!, id: submit.id, act: "submit", mods: [] });
 		expect(fx.store.get(question.id)?.answer?.data).toEqual({ target: "staging" });
 		expect(inbox?.debugState()).toMatchObject({ expanded: next.id, form: next.id });
-		const answered = harness.find(node => node.k === "card" && node.id.endsWith(`/${question.id}`));
+		const answered = harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${question.id}`));
 		expect(answered).toBeUndefined();
-		const expanded = harness.find(node => node.k === "card" && node.id.endsWith(`/${next.id}`));
+		const expanded = harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${next.id}`));
 		expect(expanded?.p).toMatchObject({ collapsed: false });
 		expect(harness.tui.nativeFallbackCount).toBe(0);
 		expect(harness.errors).toEqual([]);
@@ -170,7 +170,7 @@ test("native accordion toggles keep one card open and retain drafts without subm
 		harness.terminal.send("saved draft");
 		harness.flush();
 		const firstForm = inbox!.debugChildren[0]!;
-		const secondCard = harness.find(node => node.k === "card" && node.id.endsWith(`/${second.id}`))!;
+		const secondCard = harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${second.id}`))!;
 		harness.event({
 			ev: "toggle",
 			sf: harness.terminal.surface!,
@@ -179,8 +179,8 @@ test("native accordion toggles keep one card open and retain drafts without subm
 			collapsed: false,
 		});
 		expect(inbox!.debugState()).toMatchObject({ expanded: second.id, form: second.id });
-		const firstCard = harness.find(node => node.k === "card" && node.id.endsWith(`/${first.id}`))!;
-		expect(firstCard.p).toMatchObject({ collapsed: true, tone: "warning" });
+		const firstCard = harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${first.id}`))!;
+		expect(firstCard.p).toMatchObject({ collapsed: true, status: "pending", note: "Skipped · still pending" });
 		// Even a retained old form cannot submit after its card is folded.
 		firstForm.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
 		expect(fx.store.get(first.id)?.status).toBe("pending");
@@ -193,9 +193,10 @@ test("native accordion toggles keep one card open and retain drafts without subm
 		});
 		expect(inbox!.debugChildren[0]).toBe(firstForm);
 		expect(firstForm.debugState?.()).toMatchObject({ data: { target: "saved draft" } });
-		expect(harness.find(node => node.k === "card" && node.id.endsWith(`/${second.id}`))?.p).toMatchObject({
+		expect(harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${second.id}`))?.p).toMatchObject({
 			collapsed: true,
-			tone: "warning",
+			status: "pending",
+			note: "Skipped · still pending",
 		});
 		harness.event({
 			ev: "toggle",
@@ -345,12 +346,12 @@ test("native pending and answered tabs filter cards and preserve drafts across s
 				{ id: "answered", label: "Answered (1)" },
 			],
 		});
-		expect(harness.find(node => node.k === "card" && node.id.endsWith(`/${answered.id}`))).toBeUndefined();
+		expect(harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${answered.id}`))).toBeUndefined();
 		harness.event({ ev: "select", sf: harness.terminal.surface!, id: tabs.id, item: "answered" });
 		expect(inbox!.debugState()).toMatchObject({ tab: "answered", expanded: answered.id, form: null });
-		expect(harness.find(node => node.k === "card" && node.id.endsWith(`/${pending.id}`))).toBeUndefined();
-		expect(harness.find(node => node.k === "card" && node.id.endsWith(`/${answered.id}`))?.p).toMatchObject({
-			tone: "success",
+		expect(harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${pending.id}`))).toBeUndefined();
+		expect(harness.find(node => node.p?.role === "async-ask.question" && node.id.endsWith(`/${answered.id}`))?.p).toMatchObject({
+			status: "done",
 		});
 		draft?.handleNativeEvent?.({ type: "action", key: "", act: "submit", mods: [] });
 		expect(fx.store.get(pending.id)?.status).toBe("pending");

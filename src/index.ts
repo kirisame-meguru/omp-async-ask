@@ -1,13 +1,16 @@
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { prompt, truncate } from "@oh-my-pi/pi-utils";
+import { isNativeRendering } from "@oh-my-pi/pi-tui/native/state";
+import { isRecord, logger, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
 import { AVAILABLE, createQuestionSource, serveQuestionSources, type OwnedQuestionSource } from "./bridge";
 import { AnswerDelivery } from "./delivery";
+import { AnswerCard, questionRenderers, savedAnswerPresentation, summarizeAnswer } from "./presentation";
+import { QuestionPanel } from "./panel";
 import contextTemplate from "./prompts/context.md" with { type: "text" };
 import goalPolicy from "./prompts/goal-policy.md" with { type: "text" };
 import receiptTemplate from "./prompts/receipt.md" with { type: "text" };
 import toolDescription from "./prompts/tool.md" with { type: "text" };
-import { EVENT_TYPE, QuestionStore } from "./state";
+import { ANSWER_TYPE, EVENT_TYPE, QuestionStore } from "./state";
 import { type InboxActions, QuestionInbox, QuestionIndicator } from "./ui";
 
 const CONTEXT_TYPE = "omp-async-ask:context";
@@ -23,6 +26,7 @@ interface Connection {
 	unsubscribeWidget?: () => void;
 	source?: OwnedQuestionSource;
 	overlay?: AbortController;
+	panel?: QuestionPanel;
 }
 function supported(ctx: ExtensionContext): boolean {
 	return ctx.mode === "tui" && ctx.hasUI && ctx.agent.kind === "main";
@@ -39,6 +43,11 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const previous = connection;
 		connection = undefined;
 		if (!previous) return;
+		logger.debug("Async Ask owner invalidated", {
+			sessionId: previous.store.sessionId,
+			currentSessionId: previous.ctx.sessionManager.getSessionId(),
+			hasPanel: Boolean(previous.panel),
+		});
 		previous.unsubscribeWidget?.();
 		previous.source?.close();
 		previous.delivery.dispose();
@@ -72,6 +81,9 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 			pi.appendEntry(EVENT_TYPE, event);
 		});
 		store.restore(ctx.sessionManager.getBranch());
+		logger.debug("Async Ask owner restored", {
+			sessionId, pending: store.list().filter(question => question.status === "pending").length,
+		});
 		const delivery = new AnswerDelivery(store, {
 			sessionId: () => ctx.sessionManager.getSessionId(),
 			isIdle: () => ctx.isIdle(),
@@ -81,25 +93,37 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		});
 		const owner: Connection = { ctx, store, delivery, attention: new QuestionAttention(store) };
 		connection = owner;
-		owner.source = createQuestionSource(store, delivery, () => connection === owner && ctx.sessionManager.getSessionId() === sessionId);
+		owner.source = createQuestionSource(store, delivery, () => connection === owner && ctx.sessionManager.getSessionId() === sessionId, (question, reason) => {
+			if (connection !== owner || ctx.sessionManager.getSessionId() !== sessionId) return;
+			pi.sendMessage({
+				customType: "omp-away:call-result", display: true, attribution: "agent",
+				content: JSON.stringify({ question: question.id, title: question.title, voiceDiscussion: reason }),
+			}, { deliverAs: "aside" });
+		});
 		pi.events.emit(AVAILABLE, { version: 1, sessionId });
 		let widgetVisible = false;
 		const syncWidget = () => {
+			// Native history and drafts live with the session, not the pending count.
+			if (owner.panel) return;
 			const pending = store.list().some(question => question.status === "pending");
 			if (pending === widgetVisible) return;
 			widgetVisible = pending;
 			ctx.ui.setWidget(
 				WIDGET,
 				pending
-					? tui =>
-							new QuestionIndicator(
+					? tui => {
+							if (tui.nativeRendering) {
+								return owner.panel = new QuestionPanel(actions(owner, () => {}), tui, ctx.cwd);
+							}
+							return new QuestionIndicator(
 								actions(owner, () => {}),
 								() => {
 									if (connection !== owner) return;
 									void open(ctx).catch(error => ctx.ui.notify(String(error), "error"));
 								},
 								tui,
-							)
+							);
+						}
 					: undefined,
 			);
 		};
@@ -111,6 +135,13 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const owner = ensure(ctx);
 		if (owner.overlay) return;
 		owner.delivery.settle();
+		if (isNativeRendering()) {
+			if (!owner.panel) {
+				ctx.ui.setWidget(WIDGET, tui => owner.panel = new QuestionPanel(actions(owner, () => {}), tui, ctx.cwd));
+			}
+			owner.panel?.open();
+			return;
+		}
 		const abort = new AbortController();
 		owner.overlay = abort;
 		let inbox: QuestionInbox | undefined;
@@ -143,6 +174,17 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		"id?": "string",
 		"reason?": "string",
 	});
+	pi.registerMessageRenderer(ANSWER_TYPE, (message, options) => {
+		const details = isRecord(message.details) ? message.details : {};
+		const question = details.sessionId === connection?.store.sessionId && typeof details.requestId === "string"
+			? connection?.store.get(details.requestId) : undefined;
+		const summary = savedAnswerPresentation(details)
+			?? (question?.answer?.id === details.answerId && question?.answer ? summarizeAnswer(question) : undefined);
+		if (!summary) return undefined;
+		const raw = typeof message.content === "string"
+			? message.content : message.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
+		return new AnswerCard(summary, options.expanded, raw);
+	});
 	pi.registerTool<typeof parameters>({
 		name: "ask_async",
 		label: "Ask asynchronously",
@@ -150,6 +192,10 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		approval: "read",
 		defaultInactive: true,
 		parameters,
+		...questionRenderers(id => {
+			const owner = connection;
+			if (owner && (!id || owner.store.get(id))) void open(owner.ctx);
+		}, id => connection?.store.get(id)),
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			try {
 				signal?.throwIfAborted();
@@ -183,7 +229,10 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 								},
 								toolCallId,
 							);
-				const details = { id: question.id, status: question.status, delivery: question.delivery };
+				const details = {
+					id: question.id, status: question.status, delivery: question.delivery,
+					title: question.title, blockedWork: question.blockedWork, reason: question.reason,
+				};
 				return {
 					content: [
 						{

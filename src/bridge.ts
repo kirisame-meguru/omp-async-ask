@@ -2,7 +2,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import type { HtmlFormData } from "@oh-my-pi/pi-tui/html-form/data";
 import { isRecord, logger } from "@oh-my-pi/pi-utils";
 import type { AnswerDelivery } from "./delivery";
-import { InvalidAnswerError, type DeliveryState, type Question, type QuestionStore } from "./state";
+import { InvalidAnswerError, type AnswerNote, type DeliveryState, type Question, type QuestionStore } from "./state";
 
 export const AVAILABLE = "omp-async-ask:available:v1";
 export const CONNECT = "omp-async-ask:connect:v1";
@@ -17,7 +17,9 @@ export interface AsyncQuestion {
 	readonly html: string;
 	readonly blockedWork: string;
 	readonly createdAt: number;
-	submitConfirmed(values: HtmlFormData): QuestionSubmission;
+	readonly supportsOptionNotes?: boolean;
+	submitConfirmed(values: HtmlFormData, notes?: AnswerNote[]): QuestionSubmission;
+	withdraw(reason: string): { kind: "withdrawn" | "stale" };
 }
 export interface QuestionSource {
 	readonly version: 1;
@@ -40,7 +42,7 @@ export function serveQuestionSources(events: Events, current: () => QuestionSour
 	});
 }
 
-export function createQuestionSource(store: QuestionStore, delivery: AnswerDelivery, current: () => boolean): OwnedQuestionSource {
+export function createQuestionSource(store: QuestionStore, delivery: AnswerDelivery, current: () => boolean, onWithdraw?: (question: Question, reason: string) => void): OwnedQuestionSource {
 	const life = new AbortController();
 	const listeners = new Set<(questions: readonly AsyncQuestion[]) => void>();
 	const offers = new Map<string, CachedOffer>();
@@ -54,11 +56,23 @@ export function createQuestionSource(store: QuestionStore, delivery: AnswerDeliv
 		const cached: CachedOffer = { question, attempted: false, offer: Object.freeze({
 			id: question.id, requestId: crypto.randomUUID(), toolCallId: question.toolCallId, title: question.title,
 			html: question.html, blockedWork: question.blockedWork, createdAt: question.createdAt,
-			submitConfirmed(values: HtmlFormData): QuestionSubmission {
+			supportsOptionNotes: true,
+			withdraw(reason: string): { kind: "withdrawn" | "stale" } {
+				if (!active() || cached.attempted || store.errors.length || store.get(question.id) !== question || question.status !== "pending") return { kind: "stale" };
+				if (!reason.trim() || Buffer.byteLength(reason) > 16384) throw Error("Invalid withdrawal reason");
+				try {
+					store.withdraw(question.id, reason);
+					onWithdraw?.(question, reason);
+					return { kind: "withdrawn" };
+				} finally {
+					if (active()) refresh();
+				}
+			},
+			submitConfirmed(values: HtmlFormData, notes: AnswerNote[] = []): QuestionSubmission {
 				if (!active() || cached.attempted || store.errors.length || store.get(question.id) !== question || question.status !== "pending") return { kind: "stale" };
 				cached.attempted = true;
 				try {
-					const receipt = delivery.submitWithReceipt(question.id, values, []);
+					const receipt = delivery.submitWithReceipt(question.id, values, notes);
 					const accepted = receipt.delivery === "recorded" || (receipt.delivery === "queued" && !receipt.failure);
 					return { kind: accepted ? "accepted" : "saved", answerId: receipt.answerId, delivery: receipt.delivery };
 				} catch (error) {
