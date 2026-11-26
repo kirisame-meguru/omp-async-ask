@@ -1,7 +1,12 @@
 import type { ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
 import { onCleanup, signal, UiNode, type JSXNode, type KeyEvent } from "@oh-my-pi/pi-tui";
+import { defineRolePainter, painterFor } from "@oh-my-pi/pi-tui/term/paint";
+import "@oh-my-pi/pi-tui/term/painters/layout";
 import type { Question } from "./state";
 import { answerNodes, clean, InboxForm, questionBlock, questionState, questionStatus, type InboxActions } from "./ui";
+
+// Keep the plain-terminal column fallback until OMP includes Tern's scroll kind.
+defineRolePainter("scroll" as "col", "async-ask.body", painterFor(new UiNode("col", {}))!);
 
 /** Session-owned disclosure. Opening never takes keys from the composer. */
 export class QuestionPanel {
@@ -170,7 +175,8 @@ export class QuestionPanel {
 					onSelect: (tab: string) => { if (tab === "pending" || tab === "answered") this.switchTab(tab); },
 				}));
 				const visible = questions.filter(q => this.#tab === "pending" ? q.status === "pending" : q.status !== "pending");
-				body.push(new UiNode("col", {
+				// shortcut: OMP's kind union lacks Tern's scroll container; remove the cast when it catches up.
+				body.push(new UiNode("scroll" as "col", {
 					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(4, Math.floor(this.host.size().rows * 0.5))}lines` }),
 					scroll: { by: "start", n: this.#scrollVersion },
 					children: [
