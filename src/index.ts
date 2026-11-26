@@ -238,7 +238,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 									html: params.html ?? "",
 									blockedWork: params.blockedWork ?? "",
 									continueWith: params.continueWith,
-									key: params.key,
+									key: params.key?.trim() ? params.key : undefined,
 								},
 								toolCallId,
 							);

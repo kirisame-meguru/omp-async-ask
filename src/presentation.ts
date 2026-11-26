@@ -115,8 +115,9 @@ export function questionRenderers(
 	subscribe?: (listener: () => void) => (() => void) | undefined,
 ) {
 	return {
-		renderCall(args: ToolArgs) {
-			return new UiNode("text", { text: `Ask asynchronously · ${title(args)}` });
+		renderCall() {
+			// The host already labels the call and may compose this hook twice for results.
+			return undefined;
 		},
 		renderResult(result: ToolRenderResult, options: RenderResultOptions, _theme: unknown, args: ToolArgs = {}) {
 			const revision = signal(0);
@@ -127,6 +128,7 @@ export function questionRenderers(
 				revision();
 				const view = receipt(result, args, initial.id ? lookup?.(initial.id) : undefined);
 				return [
+					new UiNode("text", { text: `Ask asynchronously · ${view.title}`, wrap: "word" }),
 					...view.rows.map(value => new UiNode("text", { text: value, wrap: "word" })),
 					new UiNode("row", { gap: "sm", justify: "between", children: [
 						questionStatus(view.status, view.tone, view.icon),

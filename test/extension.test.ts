@@ -467,6 +467,36 @@ test("native attention follows rendering availability, restored questions and se
 	}
 });
 
+test("empty optional keys are treated as absent without weakening required-field validation", async () => {
+	const fx = fixture();
+	await fx.emit("session_start");
+	const tool = fx.tools[0]!;
+	for (const [index, key] of [undefined, "", " \t"].entries()) {
+		const result = await tool.execute(`empty-key-${index}`, {
+			op: "create", ...input, key, id: "", reason: "", continueWith: [],
+		}, undefined, undefined, fx.ctx);
+		expect(result.isError).not.toBe(true);
+		expect(result.details).toMatchObject({ status: "pending", title: input.title });
+	}
+	const events = fx.log.entries.flatMap(entry =>
+		entry.type === "custom" && entry.customType === EVENT_TYPE ? [entry.data as QuestionEvent] : []);
+	expect(events).toHaveLength(3);
+	for (const event of events) {
+		expect(event.kind).toBe("created");
+		if (event.kind === "created") expect(event.question.key).toBeUndefined();
+	}
+	const args = { op: "create", ...input, key: "stable-key" };
+	const first = await tool.execute("keyed-first", args, undefined, undefined, fx.ctx);
+	const retry = await tool.execute("keyed-retry", args, undefined, undefined, fx.ctx);
+	expect(retry.details).toEqual(first.details);
+	for (const field of ["title", "html", "blockedWork"]) {
+		const result = await tool.execute(`missing-${field}`, {
+			op: "create", ...input, key: "", [field]: "",
+		}, undefined, undefined, fx.ctx);
+		expect(result.isError).toBe(true);
+	}
+});
+
 test("reactive tool cards hide transport payloads, open the panel and follow answer state", async () => {
 	const fx = fixture({ native: true });
 	await fx.emit("session_start");
