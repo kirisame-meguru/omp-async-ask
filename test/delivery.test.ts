@@ -36,20 +36,6 @@ function setup() {
 	};
 }
 
-test("an agent answer is attributed to the agent, journaled, and never presented as the user's", () => {
-	const { store, delivery, sent, log } = setup();
-	const question = store.create(input, "one");
-	delivery.submitWithReceipt(question.id, { target: "staging" }, [], "0-Helper");
-	expect(sent[0]).toMatchObject({ attribution: "agent" });
-	const content = JSON.stringify(sent[0]);
-	expect(content).toContain("Agent 0-Helper answered");
-	expect(content).not.toContain("The user submitted");
-	const restored = new QuestionStore("a", () => {});
-	restored.restore(log.entries);
-	expect(restored.errors).toEqual([]);
-	expect(restored.get(question.id)?.answer?.by).toBe("0-Helper");
-});
-
 test("an idle submission explicitly starts a turn instead of relying on background-aside wake-up", () => {
 	const { store, delivery, port, sent, settle } = setup();
 	const question = store.create(input, "one");

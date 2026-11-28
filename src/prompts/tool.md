@@ -1,4 +1,4 @@
-Queue a question for the user without waiting for an answer. Only top-level interactive sessions create questions; any other agent in the same OMP process may list and answer them.
+Queue a question for the user without waiting for an answer. Top-level interactive sessions only.
 
 Use op=create with a short title, questions, and blockedWork naming exactly what requires the answer. Optional context is plain text (blank lines separate paragraphs) shown above the questions: evidence, findings, tradeoffs.
 
@@ -15,5 +15,3 @@ Creation returns a question ID immediately. No answer has been given. Continue a
 The user opens /questions and explicitly submits an answer later. Answers arrive as identified conversation messages at an agent step boundary without cancelling executing tools. Process them when they arrive. Never invent an answer, infer approval from silence, or use this inbox to bypass real tool approvals. Ask for credential references, not secret values.
 
 Use op=list only for deliberate recovery/inspection. Use op=withdraw with id and reason when a pending question no longer matters. A changed question must be withdrawn and recreated, not silently replaced. Submitted answers cannot be withdrawn by the model.
-
-Use op=answer with id and data ({id: value}, shaped as above) to answer another session's pending question when you actually know the answer; list shows pending questions with their forms. A session cannot answer its own questions. Agent answers are labeled as such and never count as user approval, consent, or credentials.

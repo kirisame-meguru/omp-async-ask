@@ -1,5 +1,4 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
-import type { HtmlFormData } from "@oh-my-pi/pi-coding-agent/tools/html-form/data";
 import { nativeRendering, onCleanup, UiNode } from "@oh-my-pi/pi-tui";
 import { isRecord, logger, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
@@ -34,12 +33,6 @@ interface Connection {
 function supported(ctx: ExtensionContext): boolean {
 	return ctx.mode === "tui" && ctx.hasUI && ctx.agent.kind === "main";
 }
-/** Live inboxes in this process. Extension factories are rebound per subagent session, so this module state is shared. */
-const owners = new Set<Connection>();
-function findQuestion(id: string): Connection | undefined {
-	for (const owner of owners) if (owner.store.get(id)) return owner;
-	return undefined;
-}
 
 export default function asyncAsk(pi: ExtensionAPI): void {
 	let connection: Connection | undefined;
@@ -52,7 +45,6 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const previous = connection;
 		connection = undefined;
 		if (!previous) return;
-		owners.delete(previous);
 		logger.debug("Async Ask owner invalidated", {
 			sessionId: previous.store.sessionId,
 			currentSessionId: previous.ctx.sessionManager.getSessionId(),
@@ -116,7 +108,6 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		});
 		const owner: Connection = { ctx, store, delivery, attention: new QuestionAttention(store) };
 		connection = owner;
-		owners.add(owner);
 		owner.source = createQuestionSource(store, delivery, () => connection === owner && ctx.sessionManager.getSessionId() === sessionId, (question, reason) => {
 			if (connection !== owner || ctx.sessionManager.getSessionId() !== sessionId) return;
 			pi.sendMessage({
@@ -184,7 +175,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		}
 	}
 	const parameters = pi.arktype({
-		op: "'create' | 'list' | 'withdraw' | 'answer'",
+		op: "'create' | 'list' | 'withdraw'",
 		"title?": "string",
 		"context?": "string",
 		"questions?": [questionSchema, "[]"],
@@ -193,7 +184,6 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		"key?": "string",
 		"id?": "string",
 		"reason?": "string",
-		"data?": "Record<string, string | number | string[]>",
 	});
 	pi.registerMessageRenderer(ANSWER_TYPE, (message, options) => {
 		const details = isRecord(message.details) ? message.details : {};
@@ -218,34 +208,6 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		async execute(toolCallId, params, signal, _onUpdate, ctx) {
 			try {
 				signal?.throwIfAborted();
-				if (params.op === "answer") {
-					const id = params.id ?? "";
-					const target = findQuestion(id);
-					if (!target) throw new Error("No live session in this OMP process has that question.");
-					if (target.store.sessionId === ctx.sessionManager.getSessionId())
-						throw new Error("A session cannot answer its own questions; the user answers them through /questions.");
-					// The store validates shape and fields against the question's form.
-					const data = (params.data ?? {}) as HtmlFormData;
-					const receipt = target.delivery.submitWithReceipt(id, data, [], ctx.agent.id);
-					const details = {
-						id, answerId: receipt.answerId, delivery: receipt.delivery,
-						...(receipt.failure ? { error: String(receipt.failure.error) } : {}),
-					};
-					return {
-						content: [{ type: "text", text: prompt.render(receiptTemplate, { answered: true, json: JSON.stringify(details) }) }],
-						details,
-					};
-				}
-				if (params.op === "list" && !supported(ctx)) {
-					const questions = [...owners].flatMap(owner => owner.store.list()
-						.filter(question => question.status === "pending")
-						.map(({ id, title, blockedWork, html }) => ({ id, title, blockedWork, html })));
-					const details = { questions };
-					return {
-						content: [{ type: "text", text: prompt.render(receiptTemplate, { json: JSON.stringify(details, null, 2) }) }],
-						details,
-					};
-				}
 				const owner = ensure(ctx);
 				if (params.op === "list") {
 					const questions = owner.store.list().map(({ id, title, status, delivery, blockedWork }) => ({
