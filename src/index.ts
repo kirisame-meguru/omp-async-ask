@@ -194,9 +194,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		const summary = savedAnswerPresentation(details)
 			?? (question?.answer?.id === details.answerId && question?.answer ? summarizeAnswer(question) : undefined);
 		if (!summary) return undefined;
-		const raw = typeof message.content === "string"
-			? message.content : message.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n");
-		return AnswerCard(summary, options.expanded, raw);
+		return AnswerCard(summary, options.expanded);
 	});
 	pi.registerTool<typeof parameters>({
 		name: "ask_async",

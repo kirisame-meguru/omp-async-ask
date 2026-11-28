@@ -49,14 +49,13 @@ export function savedAnswerPresentation(details: unknown): AnswerPresentation | 
 	return { title: clean(title), rows: rows.map(clean) };
 }
 
-export function AnswerCard(summary: AnswerPresentation, expanded: boolean, raw: string): UiNode {
+export function AnswerCard(summary: AnswerPresentation, expanded: boolean): UiNode {
 	const open = signal(expanded);
 	return new UiNode("col", { children: () => questionBlock({
 		role: "async-ask.answer", title: "Answer submitted", target: summary.title,
 		status: "done", collapsed: !open(), preview: { lines: 8 },
 	}, [
 		new UiNode("section", { children: summary.rows.map(answer => questionStatus(answer, "success")) }),
-		...(open() ? [new UiNode("code", { text: clean(raw), lang: "text" })] : []),
 	], undefined, collapsed => open.set(!collapsed)) });
 }
 
@@ -101,7 +100,7 @@ function receipt(result: ToolRenderResult, args: ToolArgs, current?: Question): 
 		: state === "answered" ? (failed ? (delivery === "failed" ? "Answered · send failed" : "Answered · delivery unconfirmed") : "Answered")
 		: state === "pending" ? "Awaiting answer" : "Question updated";
 	const tone = failed ? "warning" : state === "answered" ? "success" : "muted";
-	const context = current?.reason ?? details.reason ?? details.blockedWork ?? args.blockedWork;
+	const context = current?.reason ?? details.reason;
 	return {
 		title: heading, status, tone, icon: state === "withdrawn" ? "x" : undefined,
 		rows: typeof context === "string" && context ? [clean(context)] : [],
@@ -119,7 +118,7 @@ export function questionRenderers(
 			// The host already labels the call and may compose this hook twice for results.
 			return undefined;
 		},
-		renderResult(result: ToolRenderResult, options: RenderResultOptions, _theme: unknown, args: ToolArgs = {}) {
+		renderResult(result: ToolRenderResult, _options: RenderResultOptions, _theme: unknown, args: ToolArgs = {}) {
 			const revision = signal(0);
 			const off = subscribe?.(() => revision.update(n => n + 1));
 			if (off) onCleanup(off);
@@ -128,8 +127,8 @@ export function questionRenderers(
 				revision();
 				const view = receipt(result, args, initial.id ? lookup?.(initial.id) : undefined);
 				return [
-					new UiNode("text", { text: `Ask asynchronously · ${view.title}`, wrap: "word" }),
-					...view.rows.map(value => new UiNode("text", { text: value, wrap: "word" })),
+					new UiNode("text", { role: "omp.ask.fold.answer", text: view.title, wrap: "word" }),
+					...view.rows.map(value => new UiNode("text", { role: "omp.ask.fold.answer", text: value, wrap: "word" })),
 					new UiNode("row", { gap: "sm", justify: "between", children: [
 						questionStatus(view.status, view.tone, view.icon),
 						...(!view.error ? [new UiNode("button", {
@@ -137,9 +136,6 @@ export function questionRenderers(
 							onAction: () => open(view.id),
 						})] : []),
 					] }),
-					...(options.expanded ? [new UiNode("code", {
-						text: clean(result.content.flatMap(part => part.type === "text" ? [part.text] : []).join("\n")), lang: "text",
-					})] : []),
 				];
 			} });
 		},

@@ -44,7 +44,12 @@ test("panel opens inline without overlay or automatic key ownership and reserves
 	expect(fx.harness.findAll(n => n.props().role === "async-ask.question")).toHaveLength(2);
 	expect(fx.key(key("a", "a"))).toBe(false);
 	expect(fx.panel.form(fx.first.id)!.model.focused()).toBe(false);
-	expect(fx.harness.findAll(n => n.kind === "elapsed")).toHaveLength(2);
+	expect(fx.harness.findAll(n => n.kind === "elapsed")).toHaveLength(0);
+	expect(card.props()).not.toHaveProperty("target");
+	const snapshot = fx.harness.snapshot();
+	expect(snapshot).not.toContain(input.blockedWork);
+	expect(snapshot).not.toContain("Cancel skips");
+	expect(snapshot).not.toContain("still pending");
 	expect(fx.nodes(fx.first.id).some(n => n.kind === "list")).toBe(true);
 });
 

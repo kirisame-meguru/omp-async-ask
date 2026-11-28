@@ -23,7 +23,7 @@ export function clean(value: string): string {
 export function questionStatus(label: string, tone: "muted" | "success" | "warning" | "error", icon?: string): UiNode {
 	return new UiNode("row", { gap: "sm", align: "baseline", children: [
 		new UiNode("icon", { name: icon ?? (tone === "success" ? "check" : tone === "error" ? "x" : tone === "warning" ? "warn" : "clock"), tone }),
-		new UiNode("text", { text: clean(label), tone, wrap: "word" }),
+		new UiNode("text", { role: "omp.ask.fold.answer", text: clean(label), tone, wrap: "word" }),
 	] });
 }
 
@@ -68,13 +68,10 @@ export class InboxForm {
 		return JSON.stringify(this.model.data()) !== this.#defaults || this.model.notes().length > 0 || Boolean(this.model.note()?.line.text);
 	}
 	view(host: ExtensionUiHost, cwd: string): JSXNode {
-		return new UiNode("col", { gap: "sm", children: [
-			HtmlFormDialog({
-				model: this.model, title: clean(this.question.title),
-				terminalRows: () => host.size().rows, media: formMedia(this.model.form, cwd),
-			}),
-			new UiNode("text", { text: "Cancel skips for now without sending. Your draft is retained.", tone: "muted", wrap: "word" }),
-		] });
+		return HtmlFormDialog({
+			model: this.model, title: clean(this.question.title),
+			terminalRows: () => host.size().rows, media: formMedia(this.model.form, cwd),
+		});
 	}
 	key(key: KeyEvent): boolean { return this.live && this.model.key(key); }
 	dispose(): void {
@@ -285,14 +282,13 @@ export class QuestionInbox {
 							active: this.#tab, onSelect: (tab: string) => { if (tab === "pending" || tab === "answered") this.switchTab(tab); } }),
 						new UiNode("button", { text: "Close", actions: { click: "close" }, onAction: () => this.close() }),
 					] }),
-					new UiNode("text", { text: "Agent work continues. Skipping never submits an answer.", tone: "muted" }),
 					...(this.#confirm ? [
 						questionStatus(this.#confirm === "discard" ? "Close and discard unsent drafts? Questions remain pending." : "Delivery is unconfirmed. Retrying may deliver the answer twice.", "warning"),
 						new UiNode("row", { gap: "sm", children: [
 							new UiNode("button", { text: this.#confirm === "discard" ? "Discard drafts and close" : "Retry answer", actions: { click: "confirm" }, onAction: () => this.confirm() }),
 							new UiNode("button", { text: "Keep current state", actions: { click: "keep" }, onAction: () => this.keep() }),
 						] }),
-					] : this.#visible().length ? this.#visible().map(q => this.#card(q)) : [new UiNode("text", { text: this.#tab === "pending" ? "No pending questions." : "No answered questions yet." })]),
+					] : this.#visible().length ? this.#visible().map(q => this.#card(q)) : [new UiNode("text", { role: "omp.ask.fold.answer", text: this.#tab === "pending" ? "No pending questions." : "No answered questions yet." })]),
 					...(this.#message ? [questionStatus(this.#message, "warning")] : []),
 					...this.actions.errors().map(error => questionStatus(error, "error")),
 				];
@@ -306,7 +302,6 @@ export class QuestionInbox {
 			note: this.#skipped.has(question.id) ? "Skipped · still pending" : questionState(question),
 			status: question.delivery === "failed" ? "error" : question.status === "answered" ? "done" : question.status === "withdrawn" ? "cancelled" : "pending",
 			collapsed: !expanded }, expanded ? [
-				new UiNode("text", { text: `Depends on this: ${clean(question.blockedWork)}`, wrap: "word" }),
 				...(form ? [form.view(this.host, this.cwd)] : answerNodes(question)),
 				...((question.delivery === "failed" || question.delivery === "unconfirmed") ? [new UiNode("button", {
 					text: "Review resend…", actions: { click: "retry" }, onAction: () => this.retry(),
@@ -325,12 +320,12 @@ export class QuestionInbox {
 
 export function answerNodes(question: Question): JSXNode[] {
 	return [
-		...(question.reason ? [new UiNode("text", { text: clean(question.reason), tone: "muted" })] : []),
+		...(question.reason ? [new UiNode("text", { role: "omp.ask.fold.answer", text: clean(question.reason), tone: "muted" })] : []),
 		...(question.answer ? [
-			new UiNode("kv", { items: Object.entries(question.answer.data).map(([k, v]) => ({
-				k: clean(k), v: clean(Array.isArray(v) ? v.join(", ") : String(v)),
-			})) }),
-			...question.answer.notes.map(note => new UiNode("text", { text: clean(`${note.question} — ${note.option}: ${note.text}`), wrap: "word" })),
+			...Object.entries(question.answer.data).map(([k, v]) => new UiNode("text", {
+				role: "omp.ask.fold.answer", text: `${clean(k)}: ${clean(Array.isArray(v) ? v.join(", ") : String(v))}`, wrap: "word",
+			})),
+			...question.answer.notes.map(note => new UiNode("text", { role: "omp.ask.fold.answer", text: clean(`${note.question} — ${note.option}: ${note.text}`), wrap: "word" })),
 		] : []),
 	];
 }

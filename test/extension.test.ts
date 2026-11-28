@@ -448,7 +448,8 @@ test("native attention follows rendering availability, restored questions and se
 		expect(reports).toHaveLength(5);
 		expect(reports.at(-2)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
 		expect(reports.at(-1)).toContain("state=blocked");
-		expect(fx.widget()?.snapshot()).toContain("1 pending");
+		expect(fx.widget()?.snapshot()).toContain('"title":"Questions"');
+		expect(fx.widget()?.snapshot()).not.toContain("1 pending");
 		await fx.emit("session_before_switch");
 		expect(reports.at(-1)).toBe("\x1b]7501;state=clear:id=omp-async-ask\x1b\\");
 		expect(fx.widget()).toBeUndefined();
@@ -563,7 +564,8 @@ test("Tern answer cards show selected labels while preserving the full agent mes
 		expect(message.content).toContain('"target": "stage"');
 		const card = harness.find(node => node.props().role === "async-ask.answer");
 		harness.event(card, { type: "toggle", key: "", collapsed: false });
-		expect(harness.snapshot()).toContain("Question ID:");
+		expect(harness.snapshot()).not.toContain("Question ID:");
+		expect(harness.snapshot()).toContain("Staging environment");
 		// Existing sessions have only identity metadata; recover their labels from the owning journal.
 		const { presentation: _presentation, ...legacyDetails } = message.details as Record<string, unknown>;
 		const legacy = { ...message, details: legacyDetails };

@@ -28,7 +28,7 @@ test("answer summaries map submitted choices, retain Other and notes, and omit h
 		"Features: Gamma, Custom choice", "Region: East region", "Comment: literal <tag>",
 		"Features — Gamma: Please enable it",
 	]);
-	const harness = new UiHarness(() => AnswerCard(summary, false, "Technical payload"));
+	const harness = new UiHarness(() => AnswerCard(summary, false));
 	try {
 		expect(harness.snapshot()).toContain("Gamma, Custom choice");
 		expect(harness.snapshot()).not.toContain("Technical payload");
@@ -73,7 +73,7 @@ test("withdrawals, lists and errors show their actual state rather than a pendin
 
 test("the installed host renders one async heading through call/result composition", () => {
 	const title = "Async question test";
-	const heading = `Ask asynchronously · ${title}`;
+	const heading = title;
 	let opened = 0;
 	const renderers = questionRenderers(() => { opened++; });
 	let call!: InstanceType<typeof ToolCall>;
@@ -101,6 +101,10 @@ test("the installed host renders one async heading through call/result compositi
 				call.updateResult(result, false);
 				harness.terminal.render();
 				expect(headings()).toHaveLength(1);
+				expect(harness.snapshot()).not.toContain("Choose a setting");
+				for (const node of headings()) {
+					expect(node.props().role).toBe("omp.ask.fold.answer");
+				}
 				harness.resize(15);
 				expect(headings()).toHaveLength(1);
 				harness.resize(30);

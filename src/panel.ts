@@ -3,7 +3,7 @@ import { onCleanup, signal, UiNode, type JSXNode, type KeyEvent } from "@oh-my-p
 import { defineRolePainter, painterFor } from "@oh-my-pi/pi-tui/term/paint";
 import "@oh-my-pi/pi-tui/term/painters/layout";
 import type { Question } from "./state";
-import { answerNodes, clean, InboxForm, questionBlock, questionState, questionStatus, type InboxActions } from "./ui";
+import { answerNodes, clean, InboxForm, questionBlock, questionStatus, type InboxActions } from "./ui";
 
 // Keep the plain-terminal column fallback until OMP includes Tern's scroll kind.
 defineRolePainter("scroll" as "col", "async-ask.body", painterFor(new UiNode("col", {}))!);
@@ -148,13 +148,9 @@ export class QuestionPanel {
 	#question(question: Question): UiNode {
 		const form = this.#forms.get(question.id);
 		return new UiNode("section", { role: "async-ask.question", head: clean(question.title), children: [
-			questionStatus(this.#skipped.has(question.id) ? "Skipped · still pending" : questionState(question),
-				question.delivery === "failed" || question.delivery === "unconfirmed" ? "warning" : question.status === "answered" ? "success" : "muted"),
-			new UiNode("text", { text: clean(question.blockedWork), tone: "muted", wrap: "word" }),
-			new UiNode("elapsed", { age: Date.now() - question.createdAt }),
 			...(question.status === "pending" && form ? [form.view(this.host, this.cwd)] : answerNodes(question)),
 			...((question.delivery === "failed" || question.delivery === "unconfirmed") ? [
-				new UiNode("text", { text: question.delivery === "failed" ? "Your answer is saved, but sending failed." : "Answer saved. No delivery receipt is available.", tone: "warning" }),
+				questionStatus(question.delivery === "failed" ? "Send failed" : "Delivery unconfirmed", "warning"),
 				new UiNode("button", { text: "Review resend…", actions: { click: "retry" }, onAction: () => this.retry(question.id) }),
 			] : []),
 		] }, question.id);
@@ -186,7 +182,7 @@ export class QuestionPanel {
 								new UiNode("button", { text: "Retry answer", actions: { click: "confirm" }, onAction: () => this.confirm() }),
 								new UiNode("button", { text: "Keep current state", actions: { click: "keep" }, onAction: () => this.keep() }),
 							] }),
-						] : visible.length ? visible.map(q => this.#question(q)) : [new UiNode("text", { text: this.#tab === "pending" ? "No pending questions." : "No answered questions yet." })]),
+						] : visible.length ? visible.map(q => this.#question(q)) : [new UiNode("text", { role: "omp.ask.fold.answer", text: this.#tab === "pending" ? "No pending questions." : "No answered questions yet." })]),
 						...(this.#message ? [questionStatus(this.#message, "warning")] : []),
 						...this.actions.errors().map(error => questionStatus(error, "error")),
 					],
@@ -194,7 +190,7 @@ export class QuestionPanel {
 			}
 			return [
 				questionBlock({ role: "async-ask.panel", title: "Questions",
-					target: `${pending} pending${failed ? ` · ${failed} send failed` : ""}${this.actions.errors().length ? " · history error" : ""}`,
+					target: failed ? `${failed} send failed` : this.actions.errors().length ? "History error" : undefined,
 					status: failed || this.actions.errors().length ? "error" : pending ? "pending" : "done",
 					collapsed: !this.#expanded, preview: { lines: 0 } }, body, "panel", collapsed => collapsed ? this.collapse() : this.open()),
 				new UiNode("spacer", { role: "async-ask.clearance", size: "none", min: { h: "1lines" }, shrink: 0 }),
