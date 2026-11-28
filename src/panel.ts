@@ -13,7 +13,7 @@ defineRolePainter("scroll" as "col", "async-ask.body", painterFor(new UiNode("co
 export class QuestionPanel {
 	#expanded = false;
 	#hadPending: boolean;
-	#openAnswers = new Set<string>();
+	#foldedAnswers = new Set<string>();
 	#tab: "pending" | "answered" = "pending";
 	#forms = new Map<string, InboxForm>();
 	#skipped = new Set<string>();
@@ -150,9 +150,9 @@ export class QuestionPanel {
 	#question(question: Question): UiNode {
 		const form = this.#forms.get(question.id);
 		if (question.status !== "pending" || !form) {
-			const open = this.#openAnswers.has(question.id);
+			const open = !this.#foldedAnswers.has(question.id);
 			return new UiNode("section", { role: "async-ask.question", children: [AnsweredCard(question, open, next => {
-				if (next) this.#openAnswers.add(question.id); else this.#openAnswers.delete(question.id);
+				if (next) this.#foldedAnswers.delete(question.id); else this.#foldedAnswers.add(question.id);
 				this.#revision.update(n => n + 1);
 			}, () => this.retry(question.id))] }, question.id);
 		}
