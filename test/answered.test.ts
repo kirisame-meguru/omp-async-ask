@@ -27,7 +27,7 @@ test("answered cards summarize when folded and show prompts, labels and blanks w
 	let toggled: boolean | undefined;
 	const head = new UiHarness(() => AnsweredCard(question, false, next => { toggled = next; }));
 	try {
-		head.event(head.find(node => node.props().role === "async-ask.answered"), { type: "toggle", key: "", collapsed: false });
+		head.action(head.find(node => node.props().role === "omp.ask.card.head"), "expand");
 		expect(toggled).toBe(true);
 	} finally { head.dispose(); }
 	const open = new UiHarness(() => AnsweredCard(question, true, () => {}));
