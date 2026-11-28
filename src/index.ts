@@ -11,6 +11,7 @@ import goalPolicy from "./prompts/goal-policy.md" with { type: "text" };
 import receiptTemplate from "./prompts/receipt.md" with { type: "text" };
 import toolDescription from "./prompts/tool.md" with { type: "text" };
 import { ANSWER_TYPE, EVENT_TYPE, QuestionStore } from "./state";
+import { compileQuestions, questionSchema } from "./questions";
 import { type InboxActions, QuestionInbox, QuestionIndicator } from "./ui";
 
 const CONTEXT_TYPE = "omp-async-ask:context";
@@ -180,7 +181,8 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 	const parameters = pi.arktype({
 		op: "'create' | 'list' | 'withdraw'",
 		"title?": "string",
-		"html?": "string",
+		"context?": "string",
+		"questions?": [questionSchema, "[]"],
 		"blockedWork?": "string",
 		"continueWith?": "string[]",
 		"key?": "string",
@@ -233,7 +235,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 						: owner.store.create(
 								{
 									title: params.title ?? "",
-									html: params.html ?? "",
+									html: compileQuestions(params.questions ?? [], params.context),
 									blockedWork: params.blockedWork ?? "",
 									continueWith: params.continueWith,
 									key: params.key?.trim() ? params.key : undefined,

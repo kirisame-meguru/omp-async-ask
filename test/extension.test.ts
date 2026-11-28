@@ -21,7 +21,7 @@ import { EventBus } from "@oh-my-pi/pi-coding-agent/utils/event-bus";
 import { AVAILABLE, CONNECT, type AsyncQuestion, type QuestionSource } from "../src/bridge";
 import goalPolicy from "../src/prompts/goal-policy.md" with { type: "text" };
 import { ANSWER_TYPE, EVENT_TYPE, type QuestionEvent } from "../src/state";
-import { input, journal } from "./helpers";
+import { toolInput as input, journal } from "./helpers";
 
 const cleanupFixtures: (() => unknown)[] = [];
 afterEach(async () => {
@@ -490,7 +490,7 @@ test("empty optional keys are treated as absent without weakening required-field
 	const first = await tool.execute("keyed-first", args, undefined, undefined, fx.ctx);
 	const retry = await tool.execute("keyed-retry", args, undefined, undefined, fx.ctx);
 	expect(retry.details).toEqual(first.details);
-	for (const field of ["title", "html", "blockedWork"]) {
+	for (const field of ["title", "questions", "blockedWork"]) {
 		const result = await tool.execute(`missing-${field}`, {
 			op: "create", ...input, key: "", [field]: "",
 		}, undefined, undefined, fx.ctx);
@@ -540,7 +540,14 @@ test("Tern answer cards show selected labels while preserving the full agent mes
 	const question = {
 		...input,
 		title: "Choose a destination",
-		html: '<form><fieldset><legend>Destination</legend><label><input type="radio" name="target" value="stage">Staging environment</label><label><input type="radio" name="target" value="prod">Production environment</label></fieldset><label>Notes<textarea name="notes"></textarea></label><label>Retries<input type="number" name="retries"></label></form>',
+		context: "Pick where the build goes.",
+		questions: [
+			{ id: "target", prompt: "Destination", options: [
+				{ value: "stage", label: "Staging environment" }, { value: "prod", label: "Production environment" },
+			] },
+			{ id: "notes", prompt: "Notes", kind: "longtext" },
+			{ id: "retries", prompt: "Retries", kind: "number" },
+		],
 	};
 	await fx.tools[0]!.execute("native-answer", { op: "create", ...question }, undefined, undefined, fx.ctx);
 	let pending: readonly AsyncQuestion[] = [];
@@ -560,7 +567,8 @@ test("Tern answer cards show selected labels while preserving the full agent mes
 		expect(drawn).not.toContain("Question ID:");
 		expect(drawn).not.toContain("User-submitted form values");
 		expect(JSON.stringify(message)).toBe(original);
-		expect(message.content).toContain(question.html);
+		expect(message.content).toContain("Pick where the build goes.");
+		expect(message.content).toContain('value="prod"');
 		expect(message.content).toContain('"target": "stage"');
 		const card = harness.find(node => node.props().role === "async-ask.answer");
 		harness.event(card, { type: "toggle", key: "", collapsed: false });

@@ -8,6 +8,13 @@ export const input = {
 	blockedWork: "Deploying the service",
 };
 
+/** The same question as the model writes it through the ask_async tool. */
+export const toolInput = {
+	title: input.title,
+	questions: [{ id: "target", prompt: "Target", required: true }],
+	blockedWork: input.blockedWork,
+};
+
 export function journal() {
 	const entries: SessionEntry[] = [];
 	const append = (data: QuestionEvent) => {
