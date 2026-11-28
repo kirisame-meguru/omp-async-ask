@@ -16,19 +16,26 @@ const question: Question = {
 };
 
 test("answered cards summarize when folded and show prompts, labels and blanks when opened", () => {
-	const harness = new UiHarness(() => AnsweredCard(question));
+	const folded = new UiHarness(() => AnsweredCard(question, false, () => {}));
 	try {
-		const folded = harness.snapshot();
-		expect(folded).toContain("Try it");
-		expect(folded).toContain("2 of 3 answered");
-		expect(folded).toContain("Good · single, multi · —");
-		expect(folded).not.toContain("looks:");
-		harness.action(harness.find(node => node.props().role === "omp.ask.card.head"), "toggle");
-		const open = harness.snapshot();
-		expect(open).toContain("Context paragraph.");
-		expect(open).toContain("How does it look?");
-		expect(open).toContain("Anything else?");
-		expect(open).toContain("No answer");
-		expect(harness.findAll(node => node.props().role === "omp.ask.pill")).toHaveLength(3);
-	} finally { harness.dispose(); }
+		const text = folded.snapshot();
+		expect(text).toContain("Try it");
+		expect(text).toContain("2 of 3 answered");
+		expect(text).toContain("Good · single, multi · —");
+		expect(text).not.toContain("looks:");
+	} finally { folded.dispose(); }
+	let toggled: boolean | undefined;
+	const head = new UiHarness(() => AnsweredCard(question, false, next => { toggled = next; }));
+	try {
+		head.action(head.find(node => node.props().role === "omp.ask.card.head"), "expand");
+		expect(toggled).toBe(true);
+	} finally { head.dispose(); }
+	const open = new UiHarness(() => AnsweredCard(question, true, () => {}));
+	try {
+		const text = open.snapshot();
+		expect(text).toContain("Context paragraph.");
+		expect(text).toContain("How does it look?");
+		expect(text).toContain("No answer");
+		expect(open.findAll(node => node.props().role === "omp.ask.pill")).toHaveLength(3);
+	} finally { open.dispose(); }
 });

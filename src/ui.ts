@@ -303,7 +303,7 @@ export class QuestionInbox {
 			note: this.#skipped.has(question.id) ? "Skipped · still pending" : questionState(question),
 			status: question.delivery === "failed" ? "error" : question.status === "answered" ? "done" : question.status === "withdrawn" ? "cancelled" : "pending",
 			collapsed: !expanded }, expanded ? [
-				...(form ? [form.view(this.host, this.cwd)] : [AnsweredCard(question)]),
+				...(form ? [form.view(this.host, this.cwd)] : [AnsweredCard(question, true, () => {})]),
 				...((question.delivery === "failed" || question.delivery === "unconfirmed") ? [new UiNode("button", {
 					text: "Review resend…", actions: { click: "retry" }, onAction: () => this.retry(),
 				})] : []),

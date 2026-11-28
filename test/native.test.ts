@@ -84,7 +84,7 @@ test("native panel sends a bounded scroll container, not a clipped column", asyn
 			return value;
 		});
 		expect(nodes).toHaveLength(1);
-		expect(nodes[0]).toMatchObject({ k: "scroll", p: { max: { h: "15lines" } } });
+		expect(nodes[0]).toMatchObject({ k: "scroll", p: { max: { h: "20lines" } } });
 		expect(wire).toContain("Submit");
 	} finally {
 		backend.dispose();

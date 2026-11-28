@@ -13,6 +13,7 @@ defineRolePainter("scroll" as "col", "async-ask.body", painterFor(new UiNode("co
 export class QuestionPanel {
 	#expanded = false;
 	#hadPending: boolean;
+	#openAnswers = new Set<string>();
 	#tab: "pending" | "answered" = "pending";
 	#forms = new Map<string, InboxForm>();
 	#skipped = new Set<string>();
@@ -149,7 +150,11 @@ export class QuestionPanel {
 	#question(question: Question): UiNode {
 		const form = this.#forms.get(question.id);
 		if (question.status !== "pending" || !form) {
-			return new UiNode("section", { role: "async-ask.question", children: [AnsweredCard(question, () => this.retry(question.id))] }, question.id);
+			const open = this.#openAnswers.has(question.id);
+			return new UiNode("section", { role: "async-ask.question", children: [AnsweredCard(question, open, next => {
+				if (next) this.#openAnswers.add(question.id); else this.#openAnswers.delete(question.id);
+				this.#revision.update(n => n + 1);
+			}, () => this.retry(question.id))] }, question.id);
 		}
 		return new UiNode("section", { role: "async-ask.question", head: clean(question.title), children: [form.view(this.host, this.cwd)] }, question.id);
 	}
@@ -171,7 +176,8 @@ export class QuestionPanel {
 				const visible = this.#tab === "pending" ? questions.filter(q => q.status === "pending") : questions.filter(q => q.status !== "pending").reverse();
 				// shortcut: OMP's kind union lacks Tern's scroll container; remove the cast when it catches up.
 				body.push(new UiNode("scroll" as "col", {
-					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(4, Math.floor(this.host.size().rows * 0.5))}lines` }),
+					// Leave room only for the editor and status rows; the panel is the user's focus while open.
+					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(6, this.host.size().rows - 10)}lines` }),
 					scroll: { by: "start", n: this.#scrollVersion },
 					children: [
 						...(this.#retry ? [
