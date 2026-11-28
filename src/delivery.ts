@@ -37,9 +37,9 @@ export class AnswerDelivery {
 		const receipt = this.submitWithReceipt(id, data, notes);
 		if (receipt.failure) throw receipt.failure.error;
 	}
-	submitWithReceipt(id: string, data: HtmlFormData, notes: AnswerNote[]): SubmissionReceipt {
+	submitWithReceipt(id: string, data: HtmlFormData, notes: AnswerNote[], by?: string): SubmissionReceipt {
 		this.#assertCurrent();
-		const question = this.store.submit(id, data, notes);
+		const question = this.store.submit(id, data, notes, by);
 		const answerId = question.answer!.id;
 		let failure: SubmissionReceipt["failure"];
 		try {
@@ -83,12 +83,13 @@ export class AnswerDelivery {
 				{
 					customType: ANSWER_TYPE,
 					display: true,
-					attribution: "user",
+					attribution: answer.by ? "agent" : "user",
 					details: {
 						sessionId: this.store.sessionId, requestId: question.id, answerId: answer.id,
 						presentation: summarizeAnswer(question),
 					},
 					content: prompt.render(answerTemplate, {
+						agent: answer.by,
 						requestId: question.id,
 						answerId: answer.id,
 						title: question.title,

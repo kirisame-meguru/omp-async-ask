@@ -29,6 +29,8 @@ export interface SubmittedAnswer {
 	id: string;
 	data: HtmlFormData;
 	notes: AnswerNote[];
+	/** Agent registry id when another agent answered; absent for the user. */
+	by?: string;
 }
 export interface Question extends CreateQuestion {
 	id: string;
@@ -93,7 +95,8 @@ function validAnswer(value: unknown): value is SubmittedAnswer {
 		nonempty(value.id) &&
 		validData(value.data) &&
 		Array.isArray(value.notes) &&
-		value.notes.every(validNote)
+		value.notes.every(validNote) &&
+		(value.by === undefined || nonempty(value.by))
 	);
 }
 export class InvalidAnswerError extends Error {}
@@ -246,16 +249,17 @@ export class QuestionStore {
 		this.#commit({ version: 1, sessionId: this.sessionId, kind: "withdrawn", requestId: id, reason });
 		return this.get(id)!;
 	}
-	submit(id: string, data: HtmlFormData, notes: AnswerNote[]): Question {
+	submit(id: string, data: HtmlFormData, notes: AnswerNote[], by?: string): Question {
 		const question = this.#require(id);
 		if (question.status !== "pending") throw new Error("This question is no longer pending.");
+		if (by !== undefined && !nonempty(by)) throw new InvalidAnswerError("An answering agent identity is required.");
 		validateSubmission(question, data, notes);
 		this.#commit({
 			version: 1,
 			sessionId: this.sessionId,
 			kind: "submitted",
 			requestId: id,
-			answer: { id: crypto.randomUUID(), data, notes },
+			answer: { id: crypto.randomUUID(), data, notes, ...(by ? { by } : {}) },
 		});
 		return this.get(id)!;
 	}
