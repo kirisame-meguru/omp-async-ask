@@ -176,8 +176,9 @@ export class QuestionPanel {
 				const visible = this.#tab === "pending" ? questions.filter(q => q.status === "pending") : questions.filter(q => q.status !== "pending").reverse();
 				// shortcut: OMP's kind union lacks Tern's scroll container; remove the cast when it catches up.
 				body.push(new UiNode("scroll" as "col", {
-					// Bound only so very long inboxes scroll; keep just the prompt and status rows visible below.
-					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(6, this.host.size().rows - 4)}lines` }),
+					// The bound must leave room for the panel head and tabs, the composer and its status row;
+					// any larger and the scroller's bottom slides under the composer, unreachable.
+					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(6, this.host.size().rows - 14)}lines` }),
 					scroll: { by: "start", n: this.#scrollVersion },
 					children: [
 						...(this.#retry ? [
