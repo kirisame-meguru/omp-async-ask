@@ -70,14 +70,10 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 	}
 	function mountPanel(owner: Connection, ui: ExtensionUiHost): UiNode {
 		if (connection !== owner) return new UiNode("col", {});
-		owner.panel?.dispose();
-		const panel = new QuestionPanel(actions(owner, () => {}), ui, owner.ctx.cwd,
+		// The host remounts widgets when it redraws (a turn ending, a resize); the panel, with its open
+		// state, tab and drafts, belongs to the session and is disposed only by invalidate().
+		const panel = owner.panel ??= new QuestionPanel(actions(owner, () => {}), ui, owner.ctx.cwd,
 			owner.ctx.ui.composer ? handler => owner.ctx.ui.composer!.addKeyHandler(handler) : undefined);
-		owner.panel = panel;
-		onCleanup(() => {
-			panel.dispose();
-			if (owner.panel === panel) owner.panel = undefined;
-		});
 		if (owner.panelRequested) {
 			owner.panelRequested = false;
 			panel.open();

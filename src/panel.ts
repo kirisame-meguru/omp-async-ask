@@ -159,7 +159,6 @@ export class QuestionPanel {
 		return new UiNode("section", { role: "async-ask.question", head: clean(question.title), children: [form.view(this.host, this.cwd)] }, question.id);
 	}
 	view(): UiNode {
-		onCleanup(() => this.dispose());
 		return new UiNode("col", { role: "async-ask.dock", gap: "sm", children: () => {
 			this.#revision();
 			const questions = this.actions.questions();
