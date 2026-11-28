@@ -91,6 +91,7 @@ export class QuestionPanel {
 			if (this.#claimed === id) this.release();
 			form.dispose();
 			this.#forms.delete(id);
+			this.#scrollVersion++;
 			this.#skipped.delete(id);
 		}
 		if (this.#retry && !questions.some(q => q.id === this.#retry && (q.delivery === "failed" || q.delivery === "unconfirmed"))) this.#retry = undefined;
