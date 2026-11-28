@@ -3,7 +3,8 @@ import { onCleanup, signal, UiNode, type JSXNode, type KeyEvent } from "@oh-my-p
 import { defineRolePainter, painterFor } from "@oh-my-pi/pi-tui/term/paint";
 import "@oh-my-pi/pi-tui/term/painters/layout";
 import type { Question } from "./state";
-import { answerNodes, clean, InboxForm, questionBlock, questionStatus, type InboxActions } from "./ui";
+import { AnsweredCard } from "./answered";
+import { clean, InboxForm, questionBlock, questionStatus, type InboxActions } from "./ui";
 
 // Keep the plain-terminal column fallback until OMP includes Tern's scroll kind.
 defineRolePainter("scroll" as "col", "async-ask.body", painterFor(new UiNode("col", {}))!);
@@ -147,13 +148,10 @@ export class QuestionPanel {
 	keep(): void { this.#retry = undefined; this.#revision.update(n => n + 1); }
 	#question(question: Question): UiNode {
 		const form = this.#forms.get(question.id);
-		return new UiNode("section", { role: "async-ask.question", head: clean(question.title), children: [
-			...(question.status === "pending" && form ? [form.view(this.host, this.cwd)] : answerNodes(question)),
-			...((question.delivery === "failed" || question.delivery === "unconfirmed") ? [
-				questionStatus(question.delivery === "failed" ? "Send failed" : "Delivery unconfirmed", "warning"),
-				new UiNode("button", { text: "Review resend…", actions: { click: "retry" }, onAction: () => this.retry(question.id) }),
-			] : []),
-		] }, question.id);
+		if (question.status !== "pending" || !form) {
+			return new UiNode("section", { role: "async-ask.question", children: [AnsweredCard(question, () => this.retry(question.id))] }, question.id);
+		}
+		return new UiNode("section", { role: "async-ask.question", head: clean(question.title), children: [form.view(this.host, this.cwd)] }, question.id);
 	}
 	view(): UiNode {
 		onCleanup(() => this.dispose());
@@ -170,7 +168,7 @@ export class QuestionPanel {
 					active: this.#tab, variant: "underline",
 					onSelect: (tab: string) => { if (tab === "pending" || tab === "answered") this.switchTab(tab); },
 				}));
-				const visible = questions.filter(q => this.#tab === "pending" ? q.status === "pending" : q.status !== "pending");
+				const visible = this.#tab === "pending" ? questions.filter(q => q.status === "pending") : questions.filter(q => q.status !== "pending").reverse();
 				// shortcut: OMP's kind union lacks Tern's scroll container; remove the cast when it catches up.
 				body.push(new UiNode("scroll" as "col", {
 					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(4, Math.floor(this.host.size().rows * 0.5))}lines` }),

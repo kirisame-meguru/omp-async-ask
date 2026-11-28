@@ -6,6 +6,7 @@ import { HtmlFormDialog, HtmlFormModel, formMedia } from "./form.generated.mjs";
 import { nativeRendering, onCleanup, signal, UiNode, type JSXNode, type KeyEvent } from "@oh-my-pi/pi-tui";
 import { sanitizeText } from "@oh-my-pi/pi-utils";
 import type { AnswerNote, Question } from "./state";
+import { AnsweredCard } from "./answered";
 
 export interface InboxActions {
 	questions(): readonly Question[];
@@ -302,7 +303,7 @@ export class QuestionInbox {
 			note: this.#skipped.has(question.id) ? "Skipped · still pending" : questionState(question),
 			status: question.delivery === "failed" ? "error" : question.status === "answered" ? "done" : question.status === "withdrawn" ? "cancelled" : "pending",
 			collapsed: !expanded }, expanded ? [
-				...(form ? [form.view(this.host, this.cwd)] : answerNodes(question)),
+				...(form ? [form.view(this.host, this.cwd)] : [AnsweredCard(question)]),
 				...((question.delivery === "failed" || question.delivery === "unconfirmed") ? [new UiNode("button", {
 					text: "Review resend…", actions: { click: "retry" }, onAction: () => this.retry(),
 				})] : []),
@@ -316,16 +317,4 @@ export class QuestionInbox {
 		for (const form of this.#forms.values()) form.dispose();
 		this.#forms.clear();
 	}
-}
-
-export function answerNodes(question: Question): JSXNode[] {
-	return [
-		...(question.reason ? [new UiNode("text", { role: "omp.ask.fold.answer", text: clean(question.reason), tone: "muted" })] : []),
-		...(question.answer ? [
-			...Object.entries(question.answer.data).map(([k, v]) => new UiNode("text", {
-				role: "omp.ask.fold.answer", text: `${clean(k)}: ${clean(Array.isArray(v) ? v.join(", ") : String(v))}`, wrap: "word",
-			})),
-			...question.answer.notes.map(note => new UiNode("text", { role: "omp.ask.fold.answer", text: clean(`${note.question} — ${note.option}: ${note.text}`), wrap: "word" })),
-		] : []),
-	];
 }

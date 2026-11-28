@@ -14,31 +14,60 @@ export interface AnswerPresentation {
 	rows: string[];
 }
 
-/** Derive display text from the submitted values, never from recommended defaults. */
-export function summarizeAnswer(question: Question): AnswerPresentation {
-	const rows: string[] = [];
-	const answer = question.answer;
-	if (answer) {
-		const form = parseHtmlForm(question.html);
-		for (const section of form.sections) {
-			for (const block of section.blocks) {
-				if (block.kind !== "field") continue;
-				const field = block.field;
-				const value = answer.data[field.name];
-				if (value === undefined || value === "" || (Array.isArray(value) && !value.length)) continue;
-				const values = Array.isArray(value) ? value : [String(value)];
-				const labels = values.map(value => {
-					const option = field.kind === "choice" ? field.options.find(option => option.value === value) : undefined;
-					return option ? spansText(option.label) || value : value;
-				});
-				const label = spansText(field.label) || spansText(section.title) || field.name;
-				rows.push(clean(`${label}: ${labels.join(", ")}`));
+/** One question of a submitted form, resolved to what the user saw: prompt and chosen option labels. */
+export interface AnswerItem {
+	prompt: string;
+	choice: boolean;
+	/** Chosen option labels, or the typed value; empty when the user left the question blank. */
+	values: string[];
+	/** Option notes and free-text alternatives the user wrote alongside a choice. */
+	notes: string[];
+}
+
+export interface AnswerDetail {
+	intro: string[];
+	items: AnswerItem[];
+}
+
+/** Derive display data from the submitted values, never from recommended defaults. */
+export function answerDetail(question: Question): AnswerDetail {
+	const intro: string[] = [];
+	const items: AnswerItem[] = [];
+	const data = question.answer?.data ?? {};
+	const notes = question.answer?.notes ?? [];
+	const form = parseHtmlForm(question.html);
+	for (const section of form.sections) {
+		for (const block of section.blocks) {
+			if (block.kind === "text") {
+				if (!items.length) intro.push(clean(spansText(block.spans)));
+				continue;
 			}
-		}
-		for (const note of answer.notes) {
-			if (note.text) rows.push(clean(`${note.question || note.name} — ${note.option}: ${note.text}`));
+			if (block.kind !== "field") continue;
+			const field = block.field;
+			const value = data[field.name];
+			const raw = value === undefined || value === "" ? [] : Array.isArray(value) ? value : [String(value)];
+			const values = raw.map(value => {
+				const option = field.kind === "choice" ? field.options.find(option => option.value === value) : undefined;
+				return clean(option ? spansText(option.label) || value : value);
+			});
+			items.push({
+				prompt: clean(spansText(field.label) || spansText(section.title) || field.name),
+				choice: field.kind === "choice",
+				values,
+				notes: notes.filter(note => note.name === field.name && note.text).map(note => clean(`${note.option}: ${note.text}`)),
+			});
 		}
 	}
+	return { intro: intro.filter(Boolean), items };
+}
+
+export function summarizeAnswer(question: Question): AnswerPresentation {
+	const rows = question.answer
+		? answerDetail(question).items.flatMap(item => [
+			...(item.values.length ? [`${item.prompt}: ${item.values.join(", ")}`] : []),
+			...item.notes.map(note => `${item.prompt} — ${note}`),
+		])
+		: [];
 	return { title: clean(question.title), rows: rows.length ? rows : ["No values provided"] };
 }
 

@@ -25,8 +25,8 @@ const question: Question = {
 test("answer summaries map submitted choices, retain Other and notes, and omit hidden values and defaults", () => {
 	const summary = summarizeAnswer(question);
 	expect(summary.rows).toEqual([
-		"Features: Gamma, Custom choice", "Region: East region", "Comment: literal <tag>",
-		"Features — Gamma: Please enable it",
+		"Features: Gamma, Custom choice", "Features — Gamma: Please enable it",
+		"Region: East region", "Comment: literal <tag>",
 	]);
 	const harness = new UiHarness(() => AnswerCard(summary, false));
 	try {
