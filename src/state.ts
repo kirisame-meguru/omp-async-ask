@@ -29,6 +29,8 @@ export interface SubmittedAnswer {
 	id: string;
 	data: HtmlFormData;
 	notes: AnswerNote[];
+	/** The asking agent answered its own question; nothing is delivered back to it. */
+	byAgent?: true;
 }
 export interface Question extends CreateQuestion {
 	id: string;
@@ -93,7 +95,8 @@ function validAnswer(value: unknown): value is SubmittedAnswer {
 		nonempty(value.id) &&
 		validData(value.data) &&
 		Array.isArray(value.notes) &&
-		value.notes.every(validNote)
+		value.notes.every(validNote) &&
+		(value.byAgent === undefined || value.byAgent === true)
 	);
 }
 export class InvalidAnswerError extends Error {}
@@ -246,7 +249,7 @@ export class QuestionStore {
 		this.#commit({ version: 1, sessionId: this.sessionId, kind: "withdrawn", requestId: id, reason });
 		return this.get(id)!;
 	}
-	submit(id: string, data: HtmlFormData, notes: AnswerNote[]): Question {
+	submit(id: string, data: HtmlFormData, notes: AnswerNote[], byAgent = false): Question {
 		const question = this.#require(id);
 		if (question.status !== "pending") throw new Error("This question is no longer pending.");
 		validateSubmission(question, data, notes);
@@ -255,8 +258,14 @@ export class QuestionStore {
 			sessionId: this.sessionId,
 			kind: "submitted",
 			requestId: id,
-			answer: { id: crypto.randomUUID(), data, notes },
+			answer: { id: crypto.randomUUID(), data, notes, ...(byAgent ? { byAgent: true as const } : {}) },
 		});
+		return this.get(id)!;
+	}
+	/** The agent found the answer itself and already knows it, so the answer is recorded, not sent. */
+	answer(id: string, data: HtmlFormData): Question {
+		this.submit(id, data, [], true);
+		this.setDelivery(id, "recorded");
 		return this.get(id)!;
 	}
 	setDelivery(id: string, delivery: DeliveryState): void {
@@ -310,7 +319,7 @@ export class QuestionStore {
 					this.#apply(entry.data);
 					if (entry.data.kind === "submitted") {
 						const question = this.#questions.get(entry.data.requestId)!;
-						this.#questions.set(question.id, { ...question, delivery: "unconfirmed" });
+						this.#questions.set(question.id, { ...question, delivery: question.answer?.byAgent ? "recorded" : "unconfirmed" });
 					}
 				} catch (error) {
 					this.#errors.push(`Record ${entry.id}: ${String(error)}`);

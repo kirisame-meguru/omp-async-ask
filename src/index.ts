@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext, ExtensionUiHost } from "@oh-my-pi/pi-coding-agent";
+import type { HtmlFormData } from "@oh-my-pi/pi-coding-agent/tools/html-form/data";
 import { nativeRendering, onCleanup, UiNode } from "@oh-my-pi/pi-tui";
 import { isRecord, logger, prompt, truncate } from "@oh-my-pi/pi-utils";
 import { QuestionAttention } from "./attention";
@@ -175,7 +176,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		}
 	}
 	const parameters = pi.arktype({
-		op: "'create' | 'list' | 'withdraw'",
+		op: "'create' | 'list' | 'withdraw' | 'answer'",
 		"title?": "string",
 		"context?": "string",
 		"questions?": [questionSchema, "[]"],
@@ -184,6 +185,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 		"key?": "string",
 		"id?": "string",
 		"reason?": "string",
+		"data?": "Record<string, string | number | string[]>",
 	});
 	pi.registerMessageRenderer(ANSWER_TYPE, (message, options) => {
 		const details = isRecord(message.details) ? message.details : {};
@@ -228,6 +230,9 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 				const question =
 					params.op === "withdraw"
 						? owner.store.withdraw(params.id ?? "", params.reason ?? "")
+						: params.op === "answer"
+						// The store validates the values against the question's own form.
+						? owner.store.answer(params.id ?? "", (params.data ?? {}) as HtmlFormData)
 						: owner.store.create(
 								{
 									title: params.title ?? "",
@@ -249,6 +254,7 @@ export default function asyncAsk(pi: ExtensionAPI): void {
 							text: prompt.render(receiptTemplate, {
 								pending: question.status === "pending",
 								withdrawn: question.status === "withdrawn",
+								answered: params.op === "answer",
 								json: JSON.stringify(details),
 							}),
 						},

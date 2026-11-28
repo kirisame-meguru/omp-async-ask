@@ -41,6 +41,7 @@ export function questionBlock(
 export function questionState(question: Question): string {
 	if (question.status === "withdrawn") return "Withdrawn";
 	if (question.status === "pending") return "Pending";
+	if (question.answer?.byAgent) return "Answered by agent";
 	return question.delivery === "failed" ? "Answered · send failed"
 		: question.delivery === "unconfirmed" ? "Answered · delivery unconfirmed" : "Answered";
 }

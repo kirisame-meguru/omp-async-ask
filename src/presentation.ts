@@ -126,7 +126,7 @@ function receipt(result: ToolRenderResult, args: ToolArgs, current?: Question): 
 	const delivery = current?.delivery ?? details.delivery;
 	const failed = delivery === "failed" || delivery === "unconfirmed";
 	const status = state === "withdrawn" ? "Withdrawn"
-		: state === "answered" ? (failed ? (delivery === "failed" ? "Answered · send failed" : "Answered · delivery unconfirmed") : "Answered")
+		: state === "answered" ? (current?.answer?.byAgent ? "Answered by agent" : failed ? (delivery === "failed" ? "Answered · send failed" : "Answered · delivery unconfirmed") : "Answered")
 		: state === "pending" ? "Awaiting answer" : "Question updated";
 	const tone = failed ? "warning" : state === "answered" ? "success" : "muted";
 	const context = current?.reason ?? details.reason;

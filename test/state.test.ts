@@ -23,6 +23,20 @@ describe("question journal", () => {
 		expect(store.create({ ...input, key: "deploy", title: "Different" }, "four").id).not.toBe(first.id);
 	});
 
+	test("an agent answering its own question closes it as recorded, survives restore, and rejects bad values", () => {
+		const log = journal();
+		const store = new QuestionStore("a", log.append);
+		const question = store.create(input, "one");
+		expect(() => store.answer(question.id, { unknown: "x" })).toThrow();
+		const answered = store.answer(question.id, { target: "staging" });
+		expect(answered).toMatchObject({ status: "answered", delivery: "recorded", answer: { byAgent: true } });
+		const restored = new QuestionStore("a", () => {});
+		restored.restore(log.entries);
+		expect(restored.errors).toEqual([]);
+		expect(restored.get(question.id)).toMatchObject({ status: "answered", delivery: "recorded" });
+		expect(() => store.withdraw(question.id, "late")).toThrow();
+	});
+
 	test("invalid and oversized forms never enter the pending inbox", () => {
 		const log = journal();
 		const store = new QuestionStore("a", log.append);
