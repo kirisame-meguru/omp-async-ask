@@ -284,8 +284,9 @@ export class QuestionStore {
 	}
 	#observeAnswer(customType: string, details: unknown): boolean {
 		if (customType !== ANSWER_TYPE || !isRecord(details)) return false;
-		const { sessionId, requestId, answerId } = details;
-		if (sessionId !== this.sessionId || typeof requestId !== "string") return false;
+		// Question and answer IDs are UUIDs; a restarted or forked session inherits its predecessor's answers.
+		const { requestId, answerId } = details;
+		if (typeof requestId !== "string") return false;
 		const question = this.get(requestId);
 		if (!question?.answer || question.answer.id !== answerId) return false;
 		this.setDelivery(requestId, "recorded");
@@ -304,19 +305,17 @@ export class QuestionStore {
 		for (let i = start; i < entries.length; i++) {
 			const entry = entries[i]!;
 			if (entry.type === "custom" && entry.customType === EVENT_TYPE) {
-				if (
-					isRecord(entry.data) &&
-					typeof entry.data.sessionId === "string" &&
-					entry.data.sessionId !== this.sessionId
-				)
-					continue;
+				// The active branch is this conversation's history even when /restart or a fork gave it a new
+				// session ID; inherited questions are adopted into the current session.
 				try {
 					if (!validEvent(entry.data)) throw new Error("Unsupported or malformed journal event.");
 					if (entry.data.kind === "submitted") {
 						const question = this.get(entry.data.requestId);
 						if (question) validateSubmission(question, entry.data.answer.data, entry.data.answer.notes);
 					}
-					this.#apply(entry.data);
+					this.#apply(entry.data.kind === "created"
+						? { ...entry.data, question: { ...entry.data.question, sessionId: this.sessionId } }
+						: entry.data);
 					if (entry.data.kind === "submitted") {
 						const question = this.#questions.get(entry.data.requestId)!;
 						this.#questions.set(question.id, { ...question, delivery: question.answer?.byAgent ? "recorded" : "unconfirmed" });

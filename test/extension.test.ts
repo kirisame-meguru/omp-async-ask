@@ -32,7 +32,7 @@ afterEach(async () => {
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 function fixture(options: { native?: boolean; deferred?: boolean } = {}) {
 	setNativeRenderingForTest(options.native ?? false);
-	const log = journal();
+	let log = journal();
 	const handlers = new Map<string, Handler>();
 	const tools: ToolDefinition[] = [];
 	const commands = new Map<string, { handler: (args: string, ctx: ExtensionContext) => Promise<void> }>();
@@ -123,7 +123,9 @@ function fixture(options: { native?: boolean; deferred?: boolean } = {}) {
 	return {
 		events: api.events,
 		ctx,
-		log,
+		get log() {
+			return log;
+		},
 		tools,
 		commands,
 		renderers,
@@ -141,6 +143,8 @@ function fixture(options: { native?: boolean; deferred?: boolean } = {}) {
 		},
 		switchSession: () => {
 			sessionId = "b";
+			// Another session has its own branch; only /restart and forks copy history.
+			log = journal();
 		},
 		opened: () => openCount,
 		component: () => component,

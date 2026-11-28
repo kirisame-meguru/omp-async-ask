@@ -87,7 +87,7 @@ describe("question journal", () => {
 		const question = store.create(input, "one");
 		store.submit(question.id, { target: "staging" }, []);
 		const answer = store.get(question.id)!.answer!;
-		expect(store.observe(recorded("other", question.id, answer.id))).toBe(false);
+		expect(store.observe(recorded("a", question.id, "other-answer"))).toBe(false);
 		log.entries.push({
 			type: "message",
 			id: "answer-entry",
@@ -101,7 +101,7 @@ describe("question journal", () => {
 		expect(store.get(question.id)?.delivery).toBe("unconfirmed");
 	});
 
-	test("custom_message receipts match session, question, answer and custom type on restore", () => {
+	test("custom_message receipts match question, answer and custom type on restore", () => {
 		const log = journal();
 		const store = new QuestionStore("a", log.append);
 		const question = store.create(input, "one");
@@ -109,7 +109,7 @@ describe("question journal", () => {
 		const answerId = store.get(question.id)!.answer!.id;
 		const receipt = recordedEntry("a", question.id, answerId);
 		for (const wrong of [
-			recordedEntry("other", question.id, answerId),
+			recordedEntry("a", "other-question", "other-answer"),
 			recordedEntry("a", "other-question", answerId),
 			recordedEntry("a", question.id, "other-answer"),
 			{ ...receipt, customType: "unrelated" },
@@ -126,13 +126,19 @@ describe("question journal", () => {
 		expect(store.get(question.id)?.delivery).toBe("unconfirmed");
 	});
 
-	test("forks and clear boundaries do not resurrect foreign or pre-clear questions", () => {
+	test("restarted and forked sessions inherit their branch's questions; clear boundaries do not", () => {
 		const log = journal();
 		const store = new QuestionStore("a", log.append);
-		store.create(input, "one");
+		const question = store.create(input, "one");
+		store.submit(question.id, { target: "staging" }, []);
+		log.entries.push(recordedEntry("a", question.id, store.get(question.id)!.answer!.id));
+		const pending = store.create({ ...input, title: "Second" }, "two");
 		const child = new QuestionStore("b", log.append);
 		child.restore(log.entries);
-		expect(child.list()).toEqual([]);
+		expect(child.errors).toEqual([]);
+		expect(child.get(question.id)).toMatchObject({ sessionId: "b", status: "answered", delivery: "recorded" });
+		expect(child.get(pending.id)).toMatchObject({ sessionId: "b", status: "pending" });
+		child.withdraw(pending.id, "Inherited questions stay actionable");
 		log.entries.push({
 			type: "reset_boundary",
 			id: "reset",
