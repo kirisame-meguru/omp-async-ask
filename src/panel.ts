@@ -176,8 +176,8 @@ export class QuestionPanel {
 				const visible = this.#tab === "pending" ? questions.filter(q => q.status === "pending") : questions.filter(q => q.status !== "pending").reverse();
 				// shortcut: OMP's kind union lacks Tern's scroll container; remove the cast when it catches up.
 				body.push(new UiNode("scroll" as "col", {
-					// Leave room only for the editor and status rows; the panel is the user's focus while open.
-					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(6, this.host.size().rows - 10)}lines` }),
+					// Bound only so very long inboxes scroll; keep just the prompt and status rows visible below.
+					role: "async-ask.body", gap: "sm", max: () => ({ h: `${Math.max(6, this.host.size().rows - 4)}lines` }),
 					scroll: { by: "start", n: this.#scrollVersion },
 					children: [
 						...(this.#retry ? [

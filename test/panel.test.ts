@@ -156,9 +156,9 @@ test("pointer edits retain values across collapse and resize recomputes height b
 	fx.harness.event(field, { type: "edit", key: "", from: 0, to: 0, text: "staging", cursor: 7, len: 0 });
 	fx.panel.collapse();
 	fx.panel.open();
-	expect(fx.harness.find(n => n.props().role === "async-ask.body").props()).toMatchObject({ max: { h: "20lines" } });
+	expect(fx.harness.find(n => n.props().role === "async-ask.body").props()).toMatchObject({ max: { h: "26lines" } });
 	fx.harness.resize(12);
-	expect(fx.harness.find(n => n.props().role === "async-ask.body").props()).toMatchObject({ max: { h: "6lines" } });
+	expect(fx.harness.find(n => n.props().role === "async-ask.body").props()).toMatchObject({ max: { h: "8lines" } });
 	fx.submit(fx.first.id);
 	expect(fx.store.get(fx.first.id)?.answer?.data).toEqual({ target: "staging" });
 });
