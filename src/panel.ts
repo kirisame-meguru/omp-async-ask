@@ -191,7 +191,7 @@ export class QuestionPanel {
 						...(this.#message ? [questionStatus(this.#message, "warning")] : []),
 						...this.actions.errors().map(error => questionStatus(error, "error")),
 					],
-				}));
+				}, `body-${this.#scrollVersion}`));
 			}
 			return [
 				questionBlock({ role: "async-ask.panel", title: "Questions",
